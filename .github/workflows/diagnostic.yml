@@ -19,5 +19,5 @@ jobs:
       - name: تثبيت المكتبات
         run: pip install requests beautifulsoup4
 
-      - name: تشغيل التشخيص
-        run: python diagnostic.py
+      - name: اختبار الاستخراج
+        run: python test_extract.py
