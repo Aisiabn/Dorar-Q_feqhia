@@ -1,0 +1,23 @@
+name: Diagnostic
+
+on:
+  workflow_dispatch:
+
+jobs:
+  diagnostic:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: إعداد Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: تثبيت المكتبات
+        run: pip install requests beautifulsoup4
+
+      - name: تشغيل التشخيص
+        run: python diagnostic.py
