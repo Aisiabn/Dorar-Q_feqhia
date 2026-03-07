@@ -11,11 +11,16 @@ on:
 jobs:
   scrape:
     runs-on: ubuntu-latest
-    timeout-minutes: 360   # 6 ساعات — الموسوعة كبيرة
+    timeout-minutes: 360
+
+    permissions:
+      contents: write   # ضروري للـ commit
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: إعداد Python
         uses: actions/setup-python@v5
@@ -35,12 +40,10 @@ jobs:
           echo "عدد الملفات: $(ls dorar_qfiqhia/*.md 2>/dev/null | wc -l)"
           echo "الحجم الكلي: $(du -sh dorar_qfiqhia/ 2>/dev/null | cut -f1)"
 
-      - name: ضغط النتائج
-        run: zip -r qfiqhia_output.zip dorar_qfiqhia/
-
-      - name: رفع النتائج
-        uses: actions/upload-artifact@v4
-        with:
-          name: qfiqhia-data-${{ github.run_number }}
-          path: qfiqhia_output.zip
-          retention-days: 90
+      - name: حفظ الملفات في الـ repo
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add dorar_qfiqhia/
+          git diff --cached --quiet || git commit -m "scrape: تحديث موسوعة القواعد الفقهية [run #${{ github.run_number }}]"
+          git push
