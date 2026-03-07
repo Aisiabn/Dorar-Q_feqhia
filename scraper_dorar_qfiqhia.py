@@ -34,7 +34,6 @@ LEVEL_PATTERNS = [
     (5, re.compile(r'^(الفرع)\b')),
     (6, re.compile(r'^(المسألة|التنبيه|الفائدة|المَسألة|مَسألة)\b')),
 ]
-# مستوى HTML heading داخل صفحة الـ EPUB (h1 محجوز للعنوان الرئيسي)
 HTML_HEADING = {1: "h1", 2: "h2", 3: "h3", 4: "h4", 5: "h5", 6: "h6"}
 
 
@@ -69,21 +68,9 @@ h2 { font-size: 1.4em; }
 h3 { font-size: 1.25em; }
 h4 { font-size: 1.1em; }
 h5, h6 { font-size: 1em; color: #555; }
-
 p { margin: 0.6em 0; text-align: justify; }
-
-/* الآيات والأحاديث */
-.aaya {
-    font-size: 1.15em;
-    color: #1a5276;
-    font-weight: bold;
-}
-.hadith {
-    color: #1e8449;
-    font-style: italic;
-}
-
-/* الحواشي */
+.aaya  { font-size: 1.15em; color: #1a5276; font-weight: bold; }
+.hadith { color: #1e8449; font-style: italic; }
 .footnotes {
     margin-top: 2em;
     padding-top: 0.8em;
@@ -93,12 +80,7 @@ p { margin: 0.6em 0; text-align: justify; }
 }
 .footnotes p { margin: 0.3em 0; }
 sup a { color: #2980b9; text-decoration: none; font-size: 0.8em; }
-.source-link {
-    display: block;
-    margin-top: 0.5em;
-    font-size: 0.8em;
-    color: #999;
-}
+.source-link { display: block; margin-top: 0.5em; font-size: 0.8em; color: #999; }
 hr { border: none; border-top: 1px solid #ddd; margin: 1.5em 0; }
 """
 
@@ -192,7 +174,6 @@ def get_tip_text(tip) -> str:
 
 
 def extract_content(html: str) -> dict:
-    """يُعيد {"text_html": str, "footnotes": [(id, text), ...]}"""
     soup = BeautifulSoup(html, "html.parser")
 
     for tag in soup.find_all(["nav", "header", "footer", "script", "style", "form"]):
@@ -230,12 +211,13 @@ def extract_content(html: str) -> dict:
 
     articles = block.find_all("article") or soup.find_all("article") or [block]
 
-    html_parts = []
-    all_footnotes = []   # [(fn_id_str, text), ...]
+    html_parts        = []
+    all_footnotes     = []
     global_fn_counter = [1]
 
     for art in articles:
-        # ── 1. استخرج الحواشي
+
+        # ── 1. استخرج الحواشي (tips) أولاً — مطابق للكود المرجعي
         tips_map    = {}
         tip_counter = [1]
         for tip in reversed(list(art.find_all("span", class_="tip"))):
@@ -263,7 +245,7 @@ def extract_content(html: str) -> dict:
             if re.search(r"السابق|التالي|الصفحة|المراجع|اعتماد", a.get_text()):
                 a.decompose()
 
-        # ── 3. استخرج نص الـ article وأضف مراجع الحواشي كـ <sup>
+        # ── 3. استخرج النص وأضف مراجع الحواشي كـ <sup>
         raw_text = art.get_text(separator="\n")
 
         def replace_marker(m, _tips=tips_map, _fns=all_footnotes,
@@ -280,18 +262,15 @@ def extract_content(html: str) -> dict:
         processed = re.sub(r'[ \t]+', ' ', processed)
         processed = re.sub(r'\n{3,}', '\n\n', processed)
 
-        # تحويل الفقرات: سطر فارغ → <p>
-        paragraphs = re.split(r'\n{2,}', processed.strip())
-        for para in paragraphs:
+        for para in re.split(r'\n{2,}', processed.strip()):
             para = para.strip()
             if para:
-                # إذا يبدأ بـ #-heading (من title-1/2) مررها كما هي
                 if para.startswith('<h'):
                     html_parts.append(para)
                 else:
                     html_parts.append(f'<p>{para}</p>')
 
-    # ── 4. بناء قسم الحواشي
+    # ── 4. قسم الحواشي
     footnotes_html = ""
     if all_footnotes:
         fn_lines = ['<div class="footnotes"><hr/>']
@@ -305,16 +284,16 @@ def extract_content(html: str) -> dict:
         footnotes_html = "\n".join(fn_lines)
 
     return {
-        "text_html" : "\n".join(html_parts),
+        "text_html"     : "\n".join(html_parts),
         "footnotes_html": footnotes_html,
-        "fn_count"  : len(all_footnotes),
+        "fn_count"      : len(all_footnotes),
     }
 
 
-# ── بناء صفحة HTML لـ EPUB ────────────────────────────────────────
+# ── بناء صفحة XHTML لـ EPUB ──────────────────────────────────────
 def build_epub_html(title: str, level: int, url: str, parsed: dict) -> str:
     htag = HTML_HEADING.get(level, "h3")
-    body = f"""<?xml version="1.0" encoding="utf-8"?>
+    return f"""<?xml version="1.0" encoding="utf-8"?>
 <!DOCTYPE html>
 <html xmlns="http://www.w3.org/1999/xhtml" xml:lang="ar" lang="ar" dir="rtl">
 <head>
@@ -330,14 +309,10 @@ def build_epub_html(title: str, level: int, url: str, parsed: dict) -> str:
   {parsed['footnotes_html']}
 </body>
 </html>"""
-    return body
 
 
 # ── بناء الـ EPUB ─────────────────────────────────────────────────
 def build_epub(pages: list) -> None:
-    """
-    pages: [{"url", "title", "level", "html_content", "file_id"}, ...]
-    """
     book = epub.EpubBook()
     book.set_identifier("dorar-qfiqhia-2025")
     book.set_title("موسوعة القواعد الفقهية")
@@ -345,7 +320,6 @@ def build_epub(pages: list) -> None:
     book.add_author("الدرر السنية")
     book.set_direction("rtl")
 
-    # CSS
     css_item = epub.EpubItem(
         uid        = "book_css",
         file_name  = "styles/book.css",
@@ -372,62 +346,68 @@ def build_epub(pages: list) -> None:
     cover.add_item(css_item)
     book.add_item(cover)
 
-    # أضف كل صفحة
     epub_items = [cover]
-    toc_entries = []     # لبناء الـ TOC الهرمي
-    toc_stack   = {}     # level → آخر epub.Section في هذا المستوى
+    toc_entries = []
+    toc_stack   = {}
 
     for page in pages:
         item = epub.EpubHtml(
-            uid        = page["file_id"],
-            file_name  = f"pages/{page['file_id']}.xhtml",
-            lang       = "ar",
-            direction  = "rtl",
+            uid       = page["file_id"],
+            file_name = f"pages/{page['file_id']}.xhtml",
+            lang      = "ar",
+            direction = "rtl",
         )
         item.content = page["html_content"].encode("utf-8")
         item.add_item(css_item)
         book.add_item(item)
         epub_items.append(item)
 
-        lvl   = page["level"]
-        link  = epub.Link(
-            href  = f"pages/{page['file_id']}.xhtml",
-            title = page["title"],
-            uid   = page["file_id"],
-        )
+        lvl = page["level"]
 
-        # بناء TOC هرمي: المستوى 1 يصبح Section، البقية links تحته
         if lvl == 1:
-            sec = epub.Section(page["title"], href=f"pages/{page['file_id']}.xhtml")
-            toc_stack = {1: sec}
+            sec = epub.Section(page["title"],
+                               href=f"pages/{page['file_id']}.xhtml")
+            toc_stack   = {1: sec}
             toc_entries.append((sec, []))
         else:
-            # ابحث عن أقرب أب
-            parent_lvl = max((k for k in toc_stack if k < lvl), default=None)
-            if parent_lvl is not None and toc_entries:
-                # أضف كـ child للمستوى الأعلى
-                # نستخدم قائمة مسطحة مع مسافات في العنوان لأن ebooklib لا يدعم nesting كاملاً
-                indent = "  " * (lvl - 1)
-                toc_entries.append(epub.Link(
-                    href  = f"pages/{page['file_id']}.xhtml",
-                    title = indent + page["title"],
-                    uid   = page["file_id"],
-                ))
+            indent = "  " * (lvl - 1)
+            link   = epub.Link(
+                href  = f"pages/{page['file_id']}.xhtml",
+                title = indent + page["title"],
+                uid   = page["file_id"],
+            )
+            # أضفه كـ child للـ section الأب إن وُجد
+            parent_sec = next(
+                (toc_entries[i] for i in range(len(toc_entries) - 1, -1, -1)
+                 if isinstance(toc_entries[i], tuple)),
+                None
+            )
+            if parent_sec:
+                parent_sec[1].append(link)
             else:
                 toc_entries.append(link)
             toc_stack[lvl] = link
 
-    # تعيين TOC وSpine
-    book.toc       = toc_entries
-    book.spine     = ["nav"] + epub_items
+    # حوّل (Section, [children]) إلى tuple مقبول من ebooklib
+    def flatten_toc(entries):
+        result = []
+        for e in entries:
+            if isinstance(e, tuple):
+                sec, children = e
+                result.append((sec, flatten_toc(children)) if children else sec)
+            else:
+                result.append(e)
+        return result
+
+    book.toc   = flatten_toc(toc_entries)
+    book.spine = ["nav"] + epub_items
     book.add_item(epub.EpubNcx())
     book.add_item(epub.EpubNav())
 
     os.makedirs(OUT_DIR, exist_ok=True)
     epub.write_epub(EPUB_OUT, book)
     print(f"\n  ✔ EPUB محفوظ: {EPUB_OUT}")
-    print(f"     {len(pages)} صفحة  |  "
-          f"~{os.path.getsize(EPUB_OUT)//1024} KB")
+    print(f"     {len(pages)} صفحة  |  ~{os.path.getsize(EPUB_OUT)//1024} KB")
 
 
 # ── التشغيل الرئيسي ───────────────────────────────────────────────
@@ -449,11 +429,11 @@ if __name__ == "__main__":
         current_url = get_first_link(html_index)
         print(f"\n③ بدء التتبع من: {current_url}\n{'='*60}")
 
-        all_pages   = []
-        page_count  = 0
-        visited     = set()
-        lvl_names   = {1:"باب", 2:"فصل", 3:"مبحث",
-                       4:"مطلب", 5:"فرع", 6:"مسألة"}
+        all_pages  = []
+        page_count = 0
+        visited    = set()
+        lvl_names  = {1:"باب", 2:"فصل", 3:"مبحث",
+                      4:"مطلب", 5:"فرع", 6:"مسألة"}
 
         while current_url and current_url not in visited:
             visited.add(current_url)
@@ -491,8 +471,7 @@ if __name__ == "__main__":
 
         print(f"\n④ بناء الـ EPUB ({len(all_pages)} صفحة)...")
         build_epub(all_pages)
-
-        print(f"\n✔ اكتمل.")
+        print("\n✔ اكتمل.")
 
     except SystemExit as e:
         print(e)
