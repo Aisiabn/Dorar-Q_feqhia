@@ -1,0 +1,46 @@
+name: Scrape Dorar Qfiqhia
+
+on:
+  workflow_dispatch:
+    inputs:
+      test_pages:
+        description: "عدد الصفحات للاختبار (اتركه فارغاً للتحميل الكامل)"
+        required: false
+        default: ""
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360   # 6 ساعات — الموسوعة كبيرة
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: إعداد Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: تثبيت المكتبات
+        run: pip install requests beautifulsoup4 lxml
+
+      - name: تشغيل المحوّل
+        env:
+          TEST_PAGES: ${{ github.event.inputs.test_pages }}
+        run: python scraper_dorar_qfiqhia.py
+
+      - name: إحصاء الملفات
+        run: |
+          echo "عدد الملفات: $(ls dorar_qfiqhia/*.md 2>/dev/null | wc -l)"
+          echo "الحجم الكلي: $(du -sh dorar_qfiqhia/ 2>/dev/null | cut -f1)"
+
+      - name: ضغط النتائج
+        run: zip -r qfiqhia_output.zip dorar_qfiqhia/
+
+      - name: رفع النتائج
+        uses: actions/upload-artifact@v4
+        with:
+          name: qfiqhia-data-${{ github.run_number }}
+          path: qfiqhia_output.zip
+          retention-days: 90
