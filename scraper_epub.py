@@ -36,8 +36,7 @@ HTML_HEADING = {1:"h1", 2:"h2", 3:"h3", 4:"h4", 5:"h5", 6:"h6"}
 def detect_level(title):
     clean = title.strip().lstrip("#").strip()
     for lvl, pat in LEVEL_PATTERNS:
-        if pat.search(clean):
-            return lvl
+        if pat.search(clean): return lvl
     return 3
 
 BOOK_CSS = """\
@@ -87,7 +86,7 @@ def get_page(session, url, referer=INDEX):
 SECTION_RE = re.compile(r"^/qfiqhia/(\d+)(?:/|$)")
 
 def get_id_from_url(url):
-    m = SECTION_RE.match(url.replace(BASE, ""))
+    m = SECTION_RE.match(url.replace(BASE,""))
     return int(m.group(1)) if m else None
 
 def get_first_link(html):
@@ -102,8 +101,7 @@ def get_page_title(html):
     if og and og.get("content"):
         return og["content"].split(" - ", 1)[-1].strip()
     t = soup.find("title")
-    if t:
-        return t.get_text().split(" - ")[-1].strip()
+    if t: return t.get_text().split(" - ")[-1].strip()
     return ""
 
 def get_next_link(html):
@@ -127,7 +125,7 @@ def get_tip_text(tip):
     for attr in ("data-original-title","title","data-content","data-tippy-content"):
         val = tip.get(attr,"").strip()
         if val:
-            s = BeautifulSoup(val, "html.parser")
+            s = BeautifulSoup(val,"html.parser")
             convert_inner_soup(s)
             return _marker.sub('', re.sub(r'\s+',' ', s.get_text()).strip()).strip()
     convert_inner_soup(tip)
@@ -135,79 +133,74 @@ def get_tip_text(tip):
 
 def extract_content(html):
     soup = BeautifulSoup(html, "html.parser")
+
     for tag in soup.find_all(["nav","header","footer","script","style","form"]):
         tag.decompose()
-    for pat in [re.compile(r"\bmodal\b"), re.compile(r"\balert-dorar\b"),
-                re.compile(r"\btitle-manhag\b"), re.compile(r"\bdefault-gradient\b"),
-                re.compile(r"\bfooter-copyright\b"), re.compile(r"\bcard-personal\b")]:
-        for tag in soup.find_all(True, class_=pat): tag.decompose()
 
-    block = None
-    card  = soup.find("div", class_="card-body")
-    if card:
-        for pane in card.find_all("div", class_="tab-pane"):
-            if "active" not in pane.get("class",[]): continue
-            if pane.find("article") or len(pane.get_text(strip=True)) > 200:
-                block = pane; break
-        if not block:
-            for pane in card.find_all("div", class_="tab-pane"):
-                if pane.find("article"): block = pane; break
-        if not block:
-            best, best_len = None, 0
-            for pane in card.find_all("div", class_="tab-pane"):
-                t = len(pane.get_text(strip=True))
-                if t > best_len: best_len, best = t, pane
-            if best_len > 200: block = best
-    if not block:
-        block = soup.find("body") or soup
+    # الحاوي الحقيقي: div#cntnt
+    cntnt = soup.find("div", id="cntnt") or \
+            soup.find("div", class_="card-body") or \
+            soup.find("body") or soup
 
-    articles = block.find_all("article") or soup.find_all("article") or [block]
-    html_parts = []
-    all_footnotes = []
+    # أزل الواجهة المتكررة
+    for sel in ["div.card-title", "div.dorar-bg-lightGreen",
+                "div.collapse", "div.smooth-scroll", "div.white.z-depth-1"]:
+        for tag in cntnt.select(sel): tag.decompose()
+
+    for a in cntnt.find_all("a"):
+        if re.search(r"السابق|التالي|انظر أيضا|الرابط المختصر|مشاركة|اعتماد|المراجع",
+                     a.get_text(strip=True)):
+            a.decompose()
+
+    # المحتوى الفعلي: div.w-100.mt-4
+    content_div = cntnt.find("div", class_=lambda c: c and "w-100" in c and "mt-4" in c) \
+                  or cntnt
+
+    # ── الحواشي
+    tips_map, tip_counter = {}, [1]
+    for tip in reversed(list(content_div.find_all("span", class_="tip"))):
+        tip_text = get_tip_text(tip)
+        if tip_text:
+            tips_map[tip_counter[0]] = tip_text
+            tip.replace_with(f"\x01{tip_counter[0]}\x01")
+            tip_counter[0] += 1
+        else:
+            tip.decompose()
+
+    # ── تحويل العلامات → HTML
+    for span in content_div.find_all("span", class_="aaya"):
+        span.replace_with(f'<span class="aaya">﴿{span.get_text(strip=True)}﴾</span>')
+    for span in content_div.find_all("span", class_="sora"):
+        t = span.get_text(strip=True)
+        if t: span.replace_with(f' {t} ')
+    for span in content_div.find_all("span", class_="hadith"):
+        span.replace_with(f'<span class="hadith">«{span.get_text(strip=True)}»</span>')
+    for span in content_div.find_all("span", class_="title-2"):
+        span.replace_with(f'<h4>{span.get_text(strip=True)}</h4>')
+    for span in content_div.find_all("span", class_="title-1"):
+        span.replace_with(f'<h5>{span.get_text(strip=True)}</h5>')
+
+    # ── النص مع الحواشي
+    all_footnotes     = []
     global_fn_counter = [1]
+    raw_text          = content_div.get_text(separator="\n")
 
-    for art in articles:
-        tips_map, tip_counter = {}, [1]
-        for tip in reversed(list(art.find_all("span", class_="tip"))):
-            tip_text = get_tip_text(tip)
-            if tip_text:
-                tips_map[tip_counter[0]] = tip_text
-                tip.replace_with(f"\x01{tip_counter[0]}\x01")
-                tip_counter[0] += 1
-            else: tip.decompose()
+    def replace_marker(m, _t=tips_map, _f=all_footnotes, _c=global_fn_counter):
+        tid   = int(m.group(1)); body = _t.get(tid,'')
+        fn_id = f"fn{_c[0]}"
+        _f.append((fn_id, body))
+        ref   = f' <sup><a href="#{fn_id}" id="ref{_c[0]}">[{_c[0]}]</a></sup>'
+        _c[0] += 1; return ref
 
-        for span in art.find_all("span", class_="aaya"):
-            span.replace_with(f'<span class="aaya">﴿{span.get_text(strip=True)}﴾</span>')
-        for span in art.find_all("span", class_="sora"):
-            span.replace_with(f' {span.get_text(strip=True)} ')
-        for span in art.find_all("span", class_="hadith"):
-            span.replace_with(f'<span class="hadith">«{span.get_text(strip=True)}»</span>')
-        for span in art.find_all("span", class_="title-2"):
-            span.replace_with(f'<h4>{span.get_text(strip=True)}</h4>')
-        for span in art.find_all("span", class_="title-1"):
-            span.replace_with(f'<h5>{span.get_text(strip=True)}</h5>')
-        for a in art.find_all("a"):
-            if re.search(r"السابق|التالي|الصفحة|المراجع|اعتماد", a.get_text()):
-                a.decompose()
+    processed = _TIP_RE.sub(replace_marker, raw_text)
+    processed = re.sub(r'[ \t]+',' ', processed)
+    processed = re.sub(r'\n{3,}','\n\n', processed)
 
-        raw_text = art.get_text(separator="\n")
-
-        def replace_marker(m, _t=tips_map, _f=all_footnotes, _c=global_fn_counter):
-            tid = int(m.group(1))
-            body = _t.get(tid,'')
-            fn_id = f"fn{_c[0]}"
-            _f.append((fn_id, body))
-            ref = f' <sup><a href="#{fn_id}" id="ref{_c[0]}">[{_c[0]}]</a></sup>'
-            _c[0] += 1
-            return ref
-
-        processed = _TIP_RE.sub(replace_marker, raw_text)
-        processed = re.sub(r'[ \t]+',' ', processed)
-        processed = re.sub(r'\n{3,}','\n\n', processed)
-        for para in re.split(r'\n{2,}', processed.strip()):
-            para = para.strip()
-            if para:
-                html_parts.append(para if para.startswith('<h') else f'<p>{para}</p>')
+    html_parts = []
+    for para in re.split(r'\n{2,}', processed.strip()):
+        para = para.strip()
+        if para:
+            html_parts.append(para if para.startswith('<h') else f'<p>{para}</p>')
 
     footnotes_html = ""
     if all_footnotes:
@@ -337,7 +330,7 @@ if __name__ == "__main__":
             parsed = extract_content(html)
             page_count += 1
             print(f"  [{page_count}] L{level}({lvl_names.get(level,'؟')}) | "
-                  f"{title[:50]}  → {len(parsed['text_html'])} حرف | {parsed['fn_count']} حاشية")
+                  f"{title[:50]}  → {parsed['fn_count']} حاشية")
             all_pages.append({"file_id": f"p{pid:05d}", "url": current_url,
                               "title": title, "level": level,
                               "html_content": build_epub_html(title, level, current_url, parsed)})
