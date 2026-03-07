@@ -49,7 +49,7 @@ jobs:
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add dorar_qfiqhia/
+          git addم dorar_qfiqhia/
           git diff --cached --quiet && echo "لا يوجد تغيير" && exit 0
           git commit -m "scrape: تحديث موسوعة القواعد الفقهية [run #${{ github.run_number }}]"
           git push
