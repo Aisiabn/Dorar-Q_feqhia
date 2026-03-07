@@ -1,0 +1,55 @@
+name: Scrape EPUB
+
+on:
+  workflow_dispatch:
+    inputs:
+      test_pages:
+        description: "عدد الصفحات للاختبار (اتركه فارغاً للتحميل الكامل)"
+        required: false
+        default: ""
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: إعداد Git LFS
+        run: |
+          git lfs install
+          git lfs track "*.epub"
+          git add .gitattributes || true
+
+      - name: إعداد Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: تثبيت المكتبات
+        run: pip install requests beautifulsoup4 lxml ebooklib
+
+      - name: تشغيل المحوّل
+        env:
+          TEST_PAGES: ${{ github.event.inputs.test_pages }}
+        run: python scraper_epub.py
+
+      - name: إحصاء
+        run: |
+          echo "حجم الـ EPUB: $(du -sh dorar_qfiqhia/*.epub 2>/dev/null)"
+
+      - name: حفظ في الـ repo
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add dorar_qfiqhia/
+          git diff --cached --quiet && echo "لا يوجد تغيير" && exit 0
+          git commit -m "epub: تحديث موسوعة القواعد الفقهية [run #${{ github.run_number }}]"
+          git push
