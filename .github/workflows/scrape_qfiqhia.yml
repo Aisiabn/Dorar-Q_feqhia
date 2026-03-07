@@ -59,9 +59,9 @@ jobs:
 
       - name: إحصاء الملفات
         run: |
-          echo "ملفات MD:   $(ls dorar_qfiqhia/*.md  2>/dev/null | wc -l)"
-          echo "ملفات EPUB: $(ls dorar_qfiqhia/*.epub 2>/dev/null | wc -l)"
-          echo "الحجم الكلي: $(du -sh dorar_qfiqhia/ 2>/dev/null | cut -f1)"
+          echo "ملفات MD:    $(ls dorar_qfiqhia/*.md   2>/dev/null | wc -l)"
+          echo "ملفات EPUB:  $(ls dorar_qfiqhia/*.epub 2>/dev/null | wc -l)"
+          echo "الحجم الكلي: $(du -sh dorar_qfiqhia/   2>/dev/null | cut -f1)"
 
       - name: حفظ الملفات في الـ repo
         run: |
