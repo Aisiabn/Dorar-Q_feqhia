@@ -142,7 +142,7 @@ def get_tip_text(tip) -> str:
 
 def _clean_sora(span) -> str:
     text = span.get_text(strip=True)
-    text = re.sub(r'\s*\uf\w+\s*','', text).strip()
+    text = re.sub(r'[\ue000-\uf8ff]', '', text).strip()
     return text
 
 def extract_content(html: str, page_id: str) -> dict:
