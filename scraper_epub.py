@@ -32,9 +32,7 @@ body {
     margin: 1.5em 2em; color: #1a1a1a; background: #fafaf8;
 }
 h1,h2,h3,h4,h5,h6 { font-weight:bold; margin-top:1.4em; margin-bottom:0.4em; color:#2c3e50; }
-h1 { font-size:1.6em; border-bottom:2px solid #7f8c8d; padding-bottom:0.3em; }
-h2 { font-size:1.4em; } h3 { font-size:1.25em; }
-h4 { font-size:1.1em; } h5,h6 { font-size:1em; color:#555; }
+h1,h2,h3,h4,h5,h6 { font-size:1.1em; }
 p  { margin:0.6em 0; text-align:justify; }
 .aaya   { font-size:1.15em; color:#1a5276; font-weight:bold; }
 .hadith { color:#1e8449; font-style:italic; }
@@ -231,7 +229,17 @@ def extract_content(html: str, page_id: str) -> dict:
     }
 
 
-def build_epub_html(title, level, url, parsed):
+def build_epub_html(title, level, url, parsed, ancestor_headings=None):
+    """
+    ancestor_headings: قائمة (عنوان, مستوى) للعناوين الأب التي تظهر
+                       لأول مرة في هذه الصفحة — تُضاف قبل عنوان الصفحة.
+    """
+    prefix = ""
+    if ancestor_headings:
+        for anc_title, anc_level in ancestor_headings:
+            htag = HTML_HEADING.get(anc_level, "h2")
+            prefix += f"  <{htag}>{anc_title}</{htag}>\n"
+
     htag = HTML_HEADING.get(level, "h3")
     return f"""<?xml version="1.0" encoding="utf-8"?>
 <!DOCTYPE html>
@@ -242,7 +250,7 @@ def build_epub_html(title, level, url, parsed):
   <link rel="stylesheet" type="text/css" href="../styles/book.css"/>
 </head>
 <body>
-  <{htag}>{title}</{htag}>
+{prefix}  <{htag}>{title}</{htag}>
   <a class="source-link" href="{url}">{url}</a>
   <hr/>
   {parsed['text_html']}
@@ -386,10 +394,11 @@ if __name__ == "__main__":
         current_url = get_first_link(html_index)
         print(f"\n③ بدء التتبع من: {current_url}\n{'='*60}")
 
-        all_pages  = []
-        page_count = 0
-        visited    = set()
-        lvl_names  = {1:"باب",2:"فصل",3:"مبحث",4:"مطلب",5:"فرع",6:"مسألة"}
+        all_pages       = []
+        page_count      = 0
+        visited         = set()
+        seen_ancestors  = set()   # عناوين الأب التي ظهرت بالفعل
+        lvl_names       = {1:"باب",2:"فصل",3:"مبحث",4:"مطلب",5:"فرع",6:"مسألة"}
 
         while current_url and current_url not in visited:
             visited.add(current_url)
@@ -403,7 +412,14 @@ if __name__ == "__main__":
             if not breadcrumb or breadcrumb[-1] != title:
                 breadcrumb.append(title)
 
-            level  = len(breadcrumb)            # العمق = المستوى
+            # العناوين الأب الجديدة التي لم تُطبع بعد → تُضاف لهذه الصفحة
+            ancestors = breadcrumb[:-1]
+            new_ancestors = []
+            for i, anc_title in enumerate(ancestors):
+                if anc_title not in seen_ancestors:
+                    seen_ancestors.add(anc_title)
+                    new_ancestors.append((anc_title, i + 1))  # المستوى = الموضع + 1
+
             parsed = extract_content(html, page_id=f"p{pid}")
             page_count += 1
             print(f"  [{page_count}] L{level}({lvl_names.get(level,'؟')}) | "
@@ -414,8 +430,8 @@ if __name__ == "__main__":
                 "url"         : current_url,
                 "title"       : title,
                 "level"       : level,
-                "breadcrumb"  : breadcrumb,     # يُستخدم في build_toc
-                "html_content": build_epub_html(title, level, current_url, parsed),
+                "breadcrumb"  : breadcrumb,
+                "html_content": build_epub_html(title, level, current_url, parsed, new_ancestors),
             })
 
             if TEST_PAGES and page_count >= TEST_PAGES:
