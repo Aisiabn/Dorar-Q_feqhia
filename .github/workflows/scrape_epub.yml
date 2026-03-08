@@ -28,7 +28,7 @@ jobs:
       - name: Run scraper
         env:
           TEST_PAGES: ${{ github.event.inputs.test_pages }}
-        run: python scraper.py          # غيّر الاسم إن كان مختلفاً
+        run: python scraper_epub.py          # غيّر الاسم إن كان مختلفاً
 
       - name: Upload EPUB
         uses: actions/upload-artifact@v4
