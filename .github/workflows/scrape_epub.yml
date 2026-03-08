@@ -1,55 +1,38 @@
-name: Scrape EPUB
+name: Build Dorar EPUB
 
 on:
-  workflow_dispatch:
+  workflow_dispatch:          # تشغيل يدوي من GitHub UI
     inputs:
       test_pages:
-        description: "عدد الصفحات للاختبار (اتركه فارغاً للتحميل الكامل)"
+        description: 'عدد صفحات للاختبار (اتركه فارغاً للكامل)'
         required: false
-        default: ""
+        default: ''
 
 jobs:
-  scrape:
+  build:
     runs-on: ubuntu-latest
-    timeout-minutes: 360
-
-    permissions:
-      contents: write
+    timeout-minutes: 120      # ساعتان — كافية للموسوعة كاملة
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: إعداد Git LFS
-        run: |
-          git lfs install
-          git lfs track "*.epub"
-          git add .gitattributes || true
-
-      - name: إعداد Python
+      - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: '3.11'
 
-      - name: تثبيت المكتبات
-        run: pip install requests beautifulsoup4 lxml ebooklib
+      - name: Install dependencies
+        run: pip install requests beautifulsoup4 ebooklib lxml
 
-      - name: تشغيل المحوّل
+      - name: Run scraper
         env:
           TEST_PAGES: ${{ github.event.inputs.test_pages }}
-        run: python scraper_epub.py
+        run: python scraper.py          # غيّر الاسم إن كان مختلفاً
 
-      - name: إحصاء
-        run: |
-          echo "حجم الـ EPUB: $(du -sh dorar_qfiqhia/*.epub 2>/dev/null)"
-
-      - name: حفظ في الـ repo
-        run: |
-          git config user.name  "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add dorar_qfiqhia/
-          git diff --cached --quiet && echo "لا يوجد تغيير" && exit 0
-          git commit -m "epub: تحديث موسوعة القواعد الفقهية [run #${{ github.run_number }}]"
-          git push
+      - name: Upload EPUB
+        uses: actions/upload-artifact@v4
+        with:
+          name: موسوعة_القواعد_الفقهية
+          path: dorar_qfiqhia/موسوعة_القواعد_الفقهية.epub
+          retention-days: 30
