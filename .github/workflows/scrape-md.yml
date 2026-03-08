@@ -1,0 +1,39 @@
+name: Build Dorar Markdown
+
+on:
+  workflow_dispatch:
+    inputs:
+      test_pages:
+        description: 'عدد صفحات للاختبار (اتركه فارغاً للكامل)'
+        required: false
+        default: ''
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install requests beautifulsoup4 lxml
+
+      - name: Run scraper
+        env:
+          TEST_PAGES: ${{ github.event.inputs.test_pages }}
+        run: python scraper_md.py
+
+      - name: Commit to repo
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add dorar_md/
+          git diff --staged --quiet || git commit -m "update: Markdown $(date +'%Y-%m-%d')"
+          git push
