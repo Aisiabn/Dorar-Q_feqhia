@@ -28,12 +28,12 @@ jobs:
       - name: Run scraper
         env:
           TEST_PAGES: ${{ github.event.inputs.test_pages }}
-        run: python scraper_epub.py          # غيّر الاسم إن كان مختلفاً
+        run: python scraper.py          # غيّر الاسم إن كان مختلفاً
 
       - name: Commit EPUB to repo
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add dorar_qfiqhia/موسوعة_القواعد_الفقهية.epub
+          git add dorar_qfiqhia/*.epub
           git diff --staged --quiet || git commit -m "update: EPUB $(date +'%Y-%m-%d')"
           git push
