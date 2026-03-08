@@ -1,6 +1,6 @@
 """
 موسوعة القواعد الفقهية — dorar.net/qfiqhia
-مخرج: ملفات Markdown
+مخرج: ملفات Markdown — الهوامش في نهاية كل صفحة مرتبطة بمواضعها
 """
 
 import requests
@@ -96,43 +96,54 @@ def convert_inner_soup(soup_tag):
         t = inner.get_text(strip=True)
         if t: inner.replace_with(f" {t} ")
 
-def get_tip_text(tip):
-    _marker = re.compile(r'\x01\d+\x01')
-    for attr in ("data-original-title","title","data-content","data-tippy-content"):
+def get_tip_text(tip) -> str:
+    for attr in ("data-original-title","data-content","data-tippy-content"):
         val = tip.get(attr,"").strip()
         if val:
             s = BeautifulSoup(val,"html.parser")
             convert_inner_soup(s)
-            return _marker.sub('', re.sub(r'\s+',' ', s.get_text()).strip()).strip()
-    convert_inner_soup(tip)
-    return _marker.sub('', re.sub(r'\s+',' ', tip.get_text(strip=True)).strip()).strip()
+            return re.sub(r'\s+',' ', s.get_text()).strip()
+    text = re.sub(r'\s+',' ', tip.get_text()).strip()
+    text = re.sub(r'^\s*\[?\d+\]?\s*','', text).strip()
+    return text
 
-def extract_content(html):
+def _clean_sora(span) -> str:
+    text = span.get_text(strip=True)
+    text = re.sub(r'\s*\uf\w+\s*','', text).strip()
+    return text
+
+def extract_content(html: str, page_id: str) -> dict:
+    """
+    page_id: معرّف فريد للصفحة لتجنب تعارض أرقام الهوامش بين الصفحات
+    يُعيد النص مع مراجع الهوامش، والهوامش كقائمة جاهزة للطباعة في نهاية الصفحة
+    """
     soup = BeautifulSoup(html, "html.parser")
 
     for tag in soup.find_all(["nav","header","footer","script","style","form"]):
         tag.decompose()
 
-    # الحاوي الحقيقي: div#cntnt
     cntnt = soup.find("div", id="cntnt") or \
             soup.find("div", class_="card-body") or \
             soup.find("body") or soup
 
-    # أزل الواجهة المتكررة
-    for sel in ["div.card-title", "div.dorar-bg-lightGreen",
-                "div.collapse", "div.smooth-scroll", "div.white.z-depth-1"]:
+    for sel in ["div.card-title","div.dorar-bg-lightGreen","div.collapse",
+                "div.smooth-scroll","div.white.z-depth-1","span.scroll-pos",
+                "div.d-flex.justify-content-between","#enc-tip"]:
         for tag in cntnt.select(sel): tag.decompose()
 
-    for a in cntnt.find_all("a"):
-        if re.search(r"السابق|التالي|انظر أيضا|الرابط المختصر|مشاركة|اعتماد|المراجع",
-                     a.get_text(strip=True)):
-            a.decompose()
+    for h3 in cntnt.find_all("h3", id="more-titles"):
+        nxt = h3.find_next_sibling("ul")
+        if nxt: nxt.decompose()
+        h3.decompose()
 
-    # المحتوى الفعلي: div.w-100.mt-4
     content_div = cntnt.find("div", class_=lambda c: c and "w-100" in c and "mt-4" in c) \
                   or cntnt
 
-    # ── الحواشي
+    # span.sora
+    for span in content_div.find_all("span", class_="sora"):
+        span.replace_with(f" {_clean_sora(span)} ")
+
+    # الحواشي — نستخدم page_id كـ prefix للـ anchor لضمان الفرادة
     tips_map, tip_counter = {}, [1]
     for tip in reversed(list(content_div.find_all("span", class_="tip"))):
         tip_text = get_tip_text(tip)
@@ -143,44 +154,51 @@ def extract_content(html):
         else:
             tip.decompose()
 
-    # ── تحويل العلامات
+    # تحويل العلامات
     for span in content_div.find_all("span", class_="aaya"):
         span.replace_with(f"﴿{span.get_text(strip=True)}﴾")
-    for span in content_div.find_all("span", class_="sora"):
-        t = span.get_text(strip=True)
-        if t: span.replace_with(f" {t} ")
     for span in content_div.find_all("span", class_="hadith"):
         span.replace_with(f"«{span.get_text(strip=True)}»")
     for span in content_div.find_all("span", class_="title-2"):
         span.replace_with(f"\n#### {span.get_text(strip=True)}\n")
     for span in content_div.find_all("span", class_="title-1"):
         span.replace_with(f"\n##### {span.get_text(strip=True)}\n")
-    for i in range(1, 7):
+    for i in range(1,7):
         for h in content_div.find_all(f"h{i}"):
             h.replace_with(f"\n{'#'*(i+2)} {h.get_text(strip=True)}\n")
     for p in content_div.find_all("p"):
         p.insert_before("\n\n"); p.insert_after("\n\n")
+    for a in content_div.find_all("a"):
+        if re.search(r"السابق|التالي|انظر أيضا|الرابط المختصر|مشاركة", a.get_text(strip=True)):
+            a.decompose()
 
-    # ── النص
-    footnotes  = []
+    # النص مع مراجع الهوامش — anchor فريد: {page_id}-fn{N}
+    footnotes  = []   # قائمة نصوص جاهزة للطباعة
     fn_counter = [1]
     text       = content_div.get_text(separator="\n", strip=False)
 
-    def replace_marker(m, _t=tips_map, _f=footnotes, _c=fn_counter):
-        tid = int(m.group(1)); body = _t.get(tid,'')
-        _f.append(f"[^{_c[0]}]: {body}")
-        ref = f" [^{_c[0]}]"; _c[0] += 1; return ref
+    def replace_marker(m, _t=tips_map, _f=footnotes, _c=fn_counter, _pid=page_id):
+        tid  = int(m.group(1))
+        body = _t.get(tid, '')
+        n    = _c[0]
+        # مرجع في النص: [^{pid}-fn{N}]
+        # تعريف الهامش: [^{pid}-fn{N}]: النص
+        _f.append(f"[^{_pid}-fn{n}]: {body}")
+        ref = f" [^{_pid}-fn{n}]"
+        _c[0] += 1
+        return ref
 
     text = _TIP_RE.sub(replace_marker, text)
-    text = re.sub(r'[ \t]+',' ', text)
-    text = re.sub(r'\n{3,}','\n\n', text)
-    text = re.sub(r'(?<!\n)\n(?![\n#>﴿«\d])',' ', text)
-    text = re.sub(r'\n{3,}','\n\n', text).strip()
+    text = re.sub(r'[ \t]+', ' ', text)
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    text = re.sub(r'(?<!\n)\n(?![\n#>﴿«\d])', ' ', text)
+    text = re.sub(r'\n{3,}', '\n\n', text).strip()
 
     return {"text": text, "footnotes": footnotes}
 
+
 def fix_multiline_footnotes(text):
-    lines, result, fn_def = text.splitlines(), [], re.compile(r'^\[\^\d+\]:')
+    lines, result, fn_def = text.splitlines(), [], re.compile(r'^\[\^')
     i = 0
     while i < len(lines):
         line = lines[i]
@@ -195,24 +213,6 @@ def fix_multiline_footnotes(text):
             result.append(line); i += 1
     return '\n'.join(result)
 
-def renum(text, fns, global_fn_ref):
-    if not fns: return text, []
-    local_map = {}
-    for fn in fns:
-        m = re.match(r'\[\^(\d+)\]:', fn)
-        if m and m.group(1) not in local_map:
-            local_map[m.group(1)] = global_fn_ref[0]; global_fn_ref[0] += 1
-    for loc in local_map:
-        text = re.sub(rf'(?<!\d)\[\^{re.escape(loc)}\](?!\d)', f'\x02{loc}\x02', text)
-    for loc, gbl in local_map.items():
-        text = text.replace(f'\x02{loc}\x02', f'[^{gbl}]')
-    new_fns = []
-    for fn in fns:
-        m = re.match(r'\[\^(\d+)\]:(.*)', fn, re.DOTALL)
-        if m:
-            gbl = local_map.get(m.group(1))
-            if gbl: new_fns.append(f"[^{gbl}]:{m.group(2)}")
-    return text, new_fns
 
 def save_markdown(pages, file_num):
     if not pages: return
@@ -220,29 +220,36 @@ def save_markdown(pages, file_num):
     safe     = re.sub(r'[^\w\u0600-\u06FF]','_', top["title"])[:50]
     filepath = os.path.join(OUT_DIR, f"{file_num:04d}_{safe}.md")
 
-    lines         = [f"# {top['title']}\n\n> {top['url']}\n\n---\n\n"]
-    all_footnotes = []
-    global_fn_ref = [1]
+    lines = [f"# {top['title']}\n\n> {top['url']}\n\n---\n\n"]
+    total_fn = 0
 
     for page in pages:
-        heading = HEADING.get(page["level"],"####")
-        lines.append(f"{heading} {page['title']}\n\n> {page['url']}\n\n")
-        if page.get("text"):
-            text, fns = renum(page["text"], page.get("footnotes",[]), global_fn_ref)
-            lines.append(f"{text}\n\n")
-            all_footnotes.extend(fns)
-        lines.append("---\n\n")
+        heading = HEADING.get(page["level"], "####")
 
-    if all_footnotes:
-        lines.append("\n")
-        for fn in all_footnotes: lines.append(f"{fn}\n")
+        # ── عنوان الصفحة + رابط المصدر
+        lines.append(f"{heading} {page['title']}\n\n")
+        lines.append(f"> {page['url']}\n\n")
+
+        # ── المحتوى
+        if page.get("text"):
+            lines.append(f"{page['text']}\n\n")
+
+        # ── هوامش الصفحة مباشرة بعد محتواها
+        if page.get("footnotes"):
+            total_fn += len(page["footnotes"])
+            for fn in page["footnotes"]:
+                lines.append(f"{fn}\n")
+            lines.append("\n")
+
+        lines.append("---\n\n")
 
     content = fix_multiline_footnotes("".join(lines))
     with open(filepath, "w", encoding="utf-8") as f:
         f.write(content)
 
     total = sum(len(p.get("text","")) for p in pages)
-    print(f"  ✔ {filepath}  |  {len(pages)} صفحة  |  ~{total//1024} KB  |  {len(all_footnotes)} حاشية")
+    print(f"  ✔ {filepath}  |  {len(pages)} صفحة  |  ~{total//1024} KB  |  {total_fn} هامش")
+
 
 if __name__ == "__main__":
     try:
@@ -262,14 +269,17 @@ if __name__ == "__main__":
 
         while current_url and current_url not in visited:
             visited.add(current_url)
+            pid  = get_id_from_url(current_url) or page_count
             html = get_page(session, current_url, referer=INDEX); time.sleep(DELAY)
             if not html: break
+
             title  = get_page_title(html)
             level  = detect_level(title)
-            parsed = extract_content(html)
+            # page_id فريد لكل صفحة لتجنب تعارض anchors الهوامش
+            parsed = extract_content(html, page_id=f"p{pid}")
             page_count += 1
             print(f"  [{page_count}] L{level}({lvl_names.get(level,'؟')}) | "
-                  f"{title[:50]}  → {len(parsed['text'])} حرف | {len(parsed['footnotes'])} حاشية")
+                  f"{title[:50]}  → {len(parsed['text'])} حرف | {len(parsed['footnotes'])} هامش")
 
             if level == 1 and current_group:
                 save_markdown(current_group, file_num)
