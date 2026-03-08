@@ -138,9 +138,12 @@ def get_tip_text(tip) -> str:
     text = re.sub(r'^\s*\[?\d+\]?\s*','', text).strip()
     return text
 
+# ✅ الإصلاح: استبدال \uf\w+ غير الصالحة بنطاق Unicode PUA الصحيح
+_PUA_RE = re.compile(r'[\ue000-\uf8ff]')
+
 def _clean_sora(span) -> str:
     text = span.get_text(strip=True)
-    text = re.sub(r'\s*\uf\w+\s*','', text).strip()
+    text = _PUA_RE.sub('', text).strip()
     return text
 
 def extract_content(html: str, page_id: str) -> dict:
