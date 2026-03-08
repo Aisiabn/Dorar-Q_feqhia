@@ -33,7 +33,44 @@ LEVEL_PATTERNS = [
 ]
 HTML_HEADING = {1:"h1", 2:"h2", 3:"h3", 4:"h4", 5:"h5", 6:"h6"}
 
-def detect_level(title):
+def get_breadcrumb(html):
+    """
+    يستخرج قائمة عناصر الـ breadcrumb من الصفحة.
+    يجرب عدة selectors شائعة في مواقع Bootstrap/Materialize.
+    """
+    soup = BeautifulSoup(html, "html.parser")
+    for sel in [
+        "ol.breadcrumb li",
+        "ul.breadcrumb li",
+        "nav[aria-label='breadcrumb'] li",
+        ".breadcrumb-item",
+        "ol.breadcrumb",          # fallback: العنصر الأب
+    ]:
+        items = soup.select(sel)
+        if items:
+            return [i.get_text(strip=True) for i in items if i.get_text(strip=True)]
+    return []
+
+
+# خريطة عمق الـ breadcrumb → مستوى EPUB
+# سنحددها بعد رؤية الـ output الفعلي
+# المبدأ: كلما زاد العمق زاد المستوى
+BREADCRUMB_DEPTH_MAP = {
+    1: 1,   # الموسوعة فقط       → باب/قسم
+    2: 1,   # الموسوعة > باب     → باب
+    3: 2,   # > فصل              → فصل
+    4: 3,   # > مبحث             → مبحث
+    5: 4,   # > مطلب             → مطلب
+    6: 5,   # > فرع              → فرع
+}
+
+def detect_level(title, breadcrumb=None):
+    # المسار الأول: عمق الـ breadcrumb
+    if breadcrumb and len(breadcrumb) >= 2:
+        depth = len(breadcrumb)
+        return BREADCRUMB_DEPTH_MAP.get(depth, min(depth - 1, 6))
+
+    # fallback: تحليل النص كما كان
     clean = title.strip().lstrip("#").strip()
     for lvl, pat in LEVEL_PATTERNS:
         if pat.search(clean): return lvl
@@ -366,10 +403,16 @@ if __name__ == "__main__":
             html = get_page(session, current_url, referer=INDEX); time.sleep(DELAY)
             if not html: break
 
-            title  = get_page_title(html)
-            level  = detect_level(title)
-            parsed = extract_content(html, page_id=f"p{pid}")
+            title      = get_page_title(html)
+            breadcrumb = get_breadcrumb(html)
+            level      = detect_level(title, breadcrumb)
+            parsed     = extract_content(html, page_id=f"p{pid}")
             page_count += 1
+
+            # اطبع الـ breadcrumb لأول 10 صفحات للتشخيص
+            if page_count <= 10:
+                print(f"  [BREADCRUMB] {breadcrumb}")
+
             print(f"  [{page_count}] L{level}({lvl_names.get(level,'؟')}) | "
                   f"{title[:50]}  → {parsed['fn_count']} هامش")
 
