@@ -1,6 +1,6 @@
 """
 موسوعة القواعد الفقهية — dorar.net/qfiqhia
-مخرج: ملفات Markdown — الهوامش في نهاية كل صفحة مرتبطة بمواضعها
+مخرج: ملفات Markdown منظمة في مجلدات حسب الهيكل الهرمي
 """
 
 import requests
@@ -10,10 +10,10 @@ import time
 import os
 import traceback
 
-BASE    = "https://dorar.net"
-INDEX   = "https://dorar.net/qfiqhia"
-DELAY   = 1.0
-OUT_DIR = "dorar_qfiqhia"
+BASE     = "https://dorar.net"
+INDEX    = "https://dorar.net/qfiqhia"
+DELAY    = 1.0
+OUT_DIR  = "dorar_md"
 
 TEST_PAGES = None if os.environ.get("TEST_PAGES") == "None" else (
     int(os.environ["TEST_PAGES"]) if os.environ.get("TEST_PAGES") else None
@@ -21,31 +21,42 @@ TEST_PAGES = None if os.environ.get("TEST_PAGES") == "None" else (
 
 _TIP_RE = re.compile(r'\x01(\d+)\x01')
 
-LEVEL_PATTERNS = [
-    (1, re.compile(r'^(الباب|القسم|الكتاب|تمهيد)\b')),
-    (2, re.compile(r'^(الفصل|المقدمة)\b')),
-    (3, re.compile(r'^(المبحث)\b')),
-    (4, re.compile(r'^(المطلب)\b')),
-    (5, re.compile(r'^(الفرع)\b')),
-    (6, re.compile(r'^(المسألة|التنبيه|الفائدة|المَسألة|مَسألة)\b')),
-]
-HEADING = {1:"##", 2:"###", 3:"####", 4:"#####", 5:"######", 6:"#######"}
+# المستويات التي تحصل على ملف فهرس
+INDEX_LEVELS = {1, 2, 3}
 
-def detect_level(title):
-    clean = title.strip().lstrip("#").strip()
-    for lvl, pat in LEVEL_PATTERNS:
-        if pat.search(clean): return lvl
-    return 3
+CHILD_LABELS = {
+    2: ("فصل",  "فصلان",  "فصول"),
+    3: ("مبحث", "مبحثان", "مباحث"),
+    4: ("مطلب", "مطلبان", "مطالب"),
+}
+NUM_WORDS = ['', 'واحد', 'اثنان', 'ثلاثة', 'أربعة', 'خمسة',
+             'ستة', 'سبعة', 'ثمانية', 'تسعة', 'عشرة']
 
+def count_label(n, child_level):
+    sing, dual, plur = CHILD_LABELS.get(child_level, ("قسم", "قسمان", "أقسام"))
+    if n == 1: return f"{sing} واحد"
+    if n == 2: return dual
+    if 3 <= n <= 10: return f"{NUM_WORDS[n]} {plur}"
+    return f"{n} {plur}"
+
+MD_HEADING = {1:"#", 2:"##", 3:"###", 4:"####", 5:"#####", 6:"######"}
+
+def safe_filename(name):
+    """يحول العنوان لاسم ملف/مجلد آمن."""
+    name = re.sub(r'[\\/:*?"<>|]', '', name)
+    name = re.sub(r'\s+', '_', name.strip())
+    return name[:80]  # حد أقصى للطول
+
+
+# ─── الجلسة والجلب ───────────────────────────────────────────────────
 def make_session():
     s = requests.Session()
     s.headers.update({
         "User-Agent": "Mozilla/5.0 (Windows NT 6.1; WOW64) AppleWebKit/537.36 "
                       "(KHTML, like Gecko) Chrome/109.0.0.0 Safari/537.36",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         "Accept-Language": "ar,en-US;q=0.9,en;q=0.8",
         "Connection": "keep-alive",
-        "Upgrade-Insecure-Requests": "1",
     })
     return s
 
@@ -75,9 +86,10 @@ def get_page_title(html):
     soup = BeautifulSoup(html, "html.parser")
     og = soup.find("meta", property="og:title")
     if og and og.get("content"):
-        return og["content"].split(" - ", 1)[-1].strip()
+        return og["content"].split(" - ", 1)[0].strip()
     t = soup.find("title")
-    if t: return t.get_text().split(" - ")[-1].strip()
+    if t:
+        return t.get_text().split(" - ")[0].strip()
     return ""
 
 def get_next_link(html):
@@ -87,6 +99,18 @@ def get_next_link(html):
             return BASE + a["href"]
     return None
 
+def get_breadcrumb(html):
+    soup = BeautifulSoup(html, "html.parser")
+    for sel in ["ol.breadcrumb li", "ul.breadcrumb li",
+                "nav[aria-label='breadcrumb'] li", ".breadcrumb-item"]:
+        items = soup.select(sel)
+        if items:
+            texts = [i.get_text(strip=True) for i in items if i.get_text(strip=True)]
+            return texts[2:]
+    return []
+
+
+# ─── استخراج المحتوى → Markdown ──────────────────────────────────────
 def convert_inner_soup(soup_tag):
     for inner in soup_tag.find_all("span", class_="aaya"):
         inner.replace_with(f"﴿{inner.get_text(strip=True)}﴾")
@@ -97,38 +121,32 @@ def convert_inner_soup(soup_tag):
         if t: inner.replace_with(f" {t} ")
 
 def get_tip_text(tip) -> str:
-    for attr in ("data-original-title","data-content","data-tippy-content"):
-        val = tip.get(attr,"").strip()
+    for attr in ("data-original-title", "data-content", "data-tippy-content"):
+        val = tip.get(attr, "").strip()
         if val:
-            s = BeautifulSoup(val,"html.parser")
+            s = BeautifulSoup(val, "html.parser")
             convert_inner_soup(s)
-            return re.sub(r'\s+',' ', s.get_text()).strip()
-    text = re.sub(r'\s+',' ', tip.get_text()).strip()
-    text = re.sub(r'^\s*\[?\d+\]?\s*','', text).strip()
+            return re.sub(r'\s+', ' ', s.get_text()).strip()
+    text = re.sub(r'\s+', ' ', tip.get_text()).strip()
+    text = re.sub(r'^\s*\[?\d+\]?\s*', '', text).strip()
     return text
 
 def _clean_sora(span) -> str:
     text = span.get_text(strip=True)
-    text = re.sub(r'\s*\uf\w+\s*','', text).strip()
-    return text
+    return re.sub(r'[\ue000-\uf8ff]', '', text).strip()
 
-def extract_content(html: str, page_id: str) -> dict:
-    """
-    page_id: معرّف فريد للصفحة لتجنب تعارض أرقام الهوامش بين الصفحات
-    يُعيد النص مع مراجع الهوامش، والهوامش كقائمة جاهزة للطباعة في نهاية الصفحة
-    """
+def extract_markdown(html: str, title: str, level: int, url: str) -> str:
     soup = BeautifulSoup(html, "html.parser")
-
-    for tag in soup.find_all(["nav","header","footer","script","style","form"]):
+    for tag in soup.find_all(["nav", "header", "footer", "script", "style", "form"]):
         tag.decompose()
 
     cntnt = soup.find("div", id="cntnt") or \
             soup.find("div", class_="card-body") or \
             soup.find("body") or soup
 
-    for sel in ["div.card-title","div.dorar-bg-lightGreen","div.collapse",
-                "div.smooth-scroll","div.white.z-depth-1","span.scroll-pos",
-                "div.d-flex.justify-content-between","#enc-tip"]:
+    for sel in ["div.card-title", "div.dorar-bg-lightGreen", "div.collapse",
+                "div.smooth-scroll", "div.white.z-depth-1", "span.scroll-pos",
+                "div.d-flex.justify-content-between", "#enc-tip"]:
         for tag in cntnt.select(sel): tag.decompose()
 
     for h3 in cntnt.find_all("h3", id="more-titles"):
@@ -139,11 +157,10 @@ def extract_content(html: str, page_id: str) -> dict:
     content_div = cntnt.find("div", class_=lambda c: c and "w-100" in c and "mt-4" in c) \
                   or cntnt
 
-    # span.sora
     for span in content_div.find_all("span", class_="sora"):
         span.replace_with(f" {_clean_sora(span)} ")
 
-    # الحواشي — نستخدم page_id كـ prefix للـ anchor لضمان الفرادة
+    # الحواشي
     tips_map, tip_counter = {}, [1]
     for tip in reversed(list(content_div.find_all("span", class_="tip"))):
         tip_text = get_tip_text(tip)
@@ -154,7 +171,6 @@ def extract_content(html: str, page_id: str) -> dict:
         else:
             tip.decompose()
 
-    # تحويل العلامات
     for span in content_div.find_all("span", class_="aaya"):
         span.replace_with(f"﴿{span.get_text(strip=True)}﴾")
     for span in content_div.find_all("span", class_="hadith"):
@@ -163,109 +179,122 @@ def extract_content(html: str, page_id: str) -> dict:
         span.replace_with(f"\n#### {span.get_text(strip=True)}\n")
     for span in content_div.find_all("span", class_="title-1"):
         span.replace_with(f"\n##### {span.get_text(strip=True)}\n")
-    for i in range(1,7):
-        for h in content_div.find_all(f"h{i}"):
-            h.replace_with(f"\n{'#'*(i+2)} {h.get_text(strip=True)}\n")
-    for p in content_div.find_all("p"):
-        p.insert_before("\n\n"); p.insert_after("\n\n")
     for a in content_div.find_all("a"):
         if re.search(r"السابق|التالي|انظر أيضا|الرابط المختصر|مشاركة", a.get_text(strip=True)):
             a.decompose()
 
-    # النص مع مراجع الهوامش — anchor فريد: {page_id}-fn{N}
-    footnotes  = []   # قائمة نصوص جاهزة للطباعة
+    raw = content_div.get_text(separator="\n")
+
+    # استبدال markers الحواشي بـ footnote references
+    footnotes = []
     fn_counter = [1]
-    text       = content_div.get_text(separator="\n", strip=False)
 
-    def replace_marker(m, _t=tips_map, _f=footnotes, _c=fn_counter, _pid=page_id):
+    def replace_marker(m):
         tid  = int(m.group(1))
-        body = _t.get(tid, '')
-        n    = _c[0]
-        # مرجع في النص: [^{pid}-fn{N}]
-        # تعريف الهامش: [^{pid}-fn{N}]: النص
-        _f.append(f"[^{_pid}-fn{n}]: {body}")
-        ref = f" [^{_pid}-fn{n}]"
-        _c[0] += 1
-        return ref
+        body = tips_map.get(tid, '')
+        n    = fn_counter[0]
+        footnotes.append((n, body))
+        fn_counter[0] += 1
+        return f"[^{n}]"
 
-    text = _TIP_RE.sub(replace_marker, text)
-    text = re.sub(r'[ \t]+', ' ', text)
-    text = re.sub(r'\n{3,}', '\n\n', text)
-    text = re.sub(r'(?<!\n)\n(?![\n#>﴿«\d])', ' ', text)
-    text = re.sub(r'\n{3,}', '\n\n', text).strip()
+    raw = _TIP_RE.sub(replace_marker, raw)
+    raw = re.sub(r'[ \t]+', ' ', raw)
+    raw = re.sub(r'\n{3,}', '\n\n', raw).strip()
 
-    return {"text": text, "footnotes": footnotes}
+    hashes = MD_HEADING.get(level, "###")
+    lines  = [f"{hashes} {title}", f"", f"> المصدر: {url}", ""]
+    lines += [raw, ""]
+
+    if footnotes:
+        lines += ["---", "**الهوامش**", ""]
+        for n, body in footnotes:
+            lines.append(f"[^{n}]: {body}")
+
+    return "\n".join(lines)
 
 
-def fix_multiline_footnotes(text):
-    lines, result, fn_def = text.splitlines(), [], re.compile(r'^\[\^')
-    i = 0
-    while i < len(lines):
-        line = lines[i]
-        if fn_def.match(line):
-            parts = [line.rstrip()]; i += 1
-            while i < len(lines):
-                nxt = lines[i]
-                if nxt == '' or fn_def.match(nxt): break
-                parts.append(nxt.strip()); i += 1
-            result.append(' '.join(p for p in parts if p))
+# ─── بناء شجرة الأقسام لملفات الفهرس ────────────────────────────────
+def build_section_tree(real_pages):
+    sections = {}
+    order    = []
+    for page in real_pages:
+        bc = page["breadcrumb"]
+        for depth in range(min(3, len(bc) - 1)):
+            lvl   = depth + 1
+            title = bc[depth]
+            key   = (lvl, title)
+            if key not in sections:
+                sections[key] = {"title": title, "level": lvl, "children": []}
+                order.append(key)
+            if depth + 1 < len(bc):
+                child = bc[depth + 1]
+                if child not in sections[key]["children"]:
+                    sections[key]["children"].append(child)
+    return {k: sections[k] for k in order}
+
+
+def make_index_md(sec):
+    title       = sec["title"]
+    level       = sec["level"]
+    children    = sec["children"]
+    child_level = level + 1
+    hashes      = MD_HEADING.get(level, "##")
+    label       = count_label(len(children), child_level)
+
+    lines = [f"{hashes} {title}", "", f"وفيه {label}:", ""]
+    for i, c in enumerate(children, 1):
+        lines.append(f"{i}. {c}")
+    return "\n".join(lines)
+
+
+# ─── تحديد مسار الملف من الـ breadcrumb ─────────────────────────────
+def page_filepath(breadcrumb, pid, is_index=False):
+    """
+    يبني مسار الملف:
+    باب/فصل/مبحث/مطلب/filename.md
+    ملفات الفهرس تُسمى _index.md داخل مجلد القسم.
+    """
+    parts = [safe_filename(p) for p in breadcrumb]
+
+    if is_index:
+        # الفهرس يجلس داخل مجلد القسم نفسه
+        folder = os.path.join(OUT_DIR, *parts)
+        return os.path.join(folder, "_index.md")
+    else:
+        # الصفحة الفعلية: المجلد = كل الأجداد، الاسم = عنوانها
+        if len(parts) > 1:
+            folder = os.path.join(OUT_DIR, *parts[:-1])
         else:
-            result.append(line); i += 1
-    return '\n'.join(result)
+            folder = OUT_DIR
+        filename = f"{pid}_{parts[-1]}.md"
+        return os.path.join(folder, filename)
 
 
-def save_markdown(pages, file_num):
-    if not pages: return
-    top      = pages[0]
-    safe     = re.sub(r'[^\w\u0600-\u06FF]','_', top["title"])[:50]
-    filepath = os.path.join(OUT_DIR, f"{file_num:04d}_{safe}.md")
-
-    lines = [f"# {top['title']}\n\n> {top['url']}\n\n---\n\n"]
-    total_fn = 0
-
-    for page in pages:
-        heading = HEADING.get(page["level"], "####")
-
-        # ── عنوان الصفحة + رابط المصدر
-        lines.append(f"{heading} {page['title']}\n\n")
-        lines.append(f"> {page['url']}\n\n")
-
-        # ── المحتوى
-        if page.get("text"):
-            lines.append(f"{page['text']}\n\n")
-
-        # ── هوامش الصفحة مباشرة بعد محتواها
-        if page.get("footnotes"):
-            total_fn += len(page["footnotes"])
-            for fn in page["footnotes"]:
-                lines.append(f"{fn}\n")
-            lines.append("\n")
-
-        lines.append("---\n\n")
-
-    content = fix_multiline_footnotes("".join(lines))
-    with open(filepath, "w", encoding="utf-8") as f:
+def write_file(path, content):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
         f.write(content)
 
-    total = sum(len(p.get("text","")) for p in pages)
-    print(f"  ✔ {filepath}  |  {len(pages)} صفحة  |  ~{total//1024} KB  |  {total_fn} هامش")
 
-
+# ─── Main ─────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     try:
         os.makedirs(OUT_DIR, exist_ok=True)
         session = make_session()
         print("① تهيئة الجلسة...")
         get_page(session, BASE, referer=BASE); time.sleep(1.5)
+
         print("\n② جلب صفحة الفهرس...")
         html_index = get_page(session, INDEX, referer=BASE); time.sleep(2)
         if not html_index: raise SystemExit("فشل جلب الفهرس")
 
         current_url = get_first_link(html_index)
         print(f"\n③ بدء التتبع من: {current_url}\n{'='*60}")
-        current_group, file_num = [], 1
-        page_count, visited = 0, set()
-        lvl_names = {1:"باب",2:"فصل",3:"مبحث",4:"مطلب",5:"فرع",6:"مسألة"}
+
+        real_pages = []
+        page_count = 0
+        visited    = set()
+        lvl_names  = {1:"باب",2:"فصل",3:"مبحث",4:"مطلب",5:"فرع",6:"مسألة"}
 
         while current_url and current_url not in visited:
             visited.add(current_url)
@@ -273,28 +302,54 @@ if __name__ == "__main__":
             html = get_page(session, current_url, referer=INDEX); time.sleep(DELAY)
             if not html: break
 
-            title  = get_page_title(html)
-            level  = detect_level(title)
-            # page_id فريد لكل صفحة لتجنب تعارض anchors الهوامش
-            parsed = extract_content(html, page_id=f"p{pid}")
+            title      = get_page_title(html)
+            breadcrumb = get_breadcrumb(html)
+            if not breadcrumb or breadcrumb[-1] != title:
+                breadcrumb.append(title)
+            level = len(breadcrumb)
+
+            md_content = extract_markdown(html, title, level, current_url)
             page_count += 1
-            print(f"  [{page_count}] L{level}({lvl_names.get(level,'؟')}) | "
-                  f"{title[:50]}  → {len(parsed['text'])} حرف | {len(parsed['footnotes'])} هامش")
+            print(f"  [{page_count}] L{level}({lvl_names.get(level,'؟')}) | {title[:50]}")
 
-            if level == 1 and current_group:
-                save_markdown(current_group, file_num)
-                file_num += 1; current_group = []
-
-            current_group.append({"url": current_url, "title": title,
-                                  "level": level, **parsed})
+            real_pages.append({
+                "pid"       : pid,
+                "url"       : current_url,
+                "title"     : title,
+                "level"     : level,
+                "breadcrumb": breadcrumb,
+                "md"        : md_content,
+            })
 
             if TEST_PAGES and page_count >= TEST_PAGES:
                 print(f"\n  [اختبار] توقف عند {TEST_PAGES}"); break
             current_url = get_next_link(html)
 
-        if current_group:
-            save_markdown(current_group, file_num)
+        # ── بناء ملفات الفهرس ──
+        print(f"\n④ بناء ملفات الفهارس...")
+        sections      = build_section_tree(real_pages)
+        written_idx   = set()
+        idx_count     = 0
 
-        print(f"\n✔ اكتمل: {page_count} صفحة → {file_num} ملف")
+        for page in real_pages:
+            bc = page["breadcrumb"]
+            # أنشئ ملفات الفهرس للأجداد عند أول ظهور
+            for depth in range(min(3, len(bc) - 1)):
+                key = (depth + 1, bc[depth])
+                if key not in written_idx and key in sections:
+                    written_idx.add(key)
+                    sec  = sections[key]
+                    path = page_filepath(bc[:depth + 1], None, is_index=True)
+                    write_file(path, make_index_md(sec))
+                    idx_count += 1
+                    print(f"  [فهرس] {path}")
+
+            # اكتب الصفحة الفعلية
+            path = page_filepath(bc, page["pid"])
+            write_file(path, page["md"])
+
+        print(f"\n✔ اكتمل: {page_count} صفحة فعلية + {idx_count} فهرس")
+        print(f"  المجلد: {os.path.abspath(OUT_DIR)}")
+
     except SystemExit as e: print(e)
     except Exception: traceback.print_exc()
