@@ -22,59 +22,7 @@ TEST_PAGES = None if os.environ.get("TEST_PAGES") == "None" else (
 )
 
 _TIP_RE = re.compile(r'\x01(\d+)\x01')
-
-LEVEL_PATTERNS = [
-    (1, re.compile(r'^(الباب|القسم|الكتاب|تمهيد)')),
-    (2, re.compile(r'^(الفصل|المقدمة)')),
-    (3, re.compile(r'^(المبحث)')),
-    (4, re.compile(r'^(المطلب)')),
-    (5, re.compile(r'^(الفرع)')),
-    (6, re.compile(r'^(المسألة|التنبيه|الفائدة|المَسألة|مَسألة)')),
-]
 HTML_HEADING = {1:"h1", 2:"h2", 3:"h3", 4:"h4", 5:"h5", 6:"h6"}
-
-def get_breadcrumb(html):
-    """
-    يستخرج قائمة عناصر الـ breadcrumb من الصفحة.
-    يجرب عدة selectors شائعة في مواقع Bootstrap/Materialize.
-    """
-    soup = BeautifulSoup(html, "html.parser")
-    for sel in [
-        "ol.breadcrumb li",
-        "ul.breadcrumb li",
-        "nav[aria-label='breadcrumb'] li",
-        ".breadcrumb-item",
-        "ol.breadcrumb",          # fallback: العنصر الأب
-    ]:
-        items = soup.select(sel)
-        if items:
-            return [i.get_text(strip=True) for i in items if i.get_text(strip=True)]
-    return []
-
-
-# خريطة عمق الـ breadcrumb → مستوى EPUB
-# سنحددها بعد رؤية الـ output الفعلي
-# المبدأ: كلما زاد العمق زاد المستوى
-BREADCRUMB_DEPTH_MAP = {
-    1: 1,   # الموسوعة فقط       → باب/قسم
-    2: 1,   # الموسوعة > باب     → باب
-    3: 2,   # > فصل              → فصل
-    4: 3,   # > مبحث             → مبحث
-    5: 4,   # > مطلب             → مطلب
-    6: 5,   # > فرع              → فرع
-}
-
-def detect_level(title, breadcrumb=None):
-    # المسار الأول: عمق الـ breadcrumb
-    if breadcrumb and len(breadcrumb) >= 2:
-        depth = len(breadcrumb)
-        return BREADCRUMB_DEPTH_MAP.get(depth, min(depth - 1, 6))
-
-    # fallback: تحليل النص كما كان
-    clean = title.strip().lstrip("#").strip()
-    for lvl, pat in LEVEL_PATTERNS:
-        if pat.search(clean): return lvl
-    return 3
 
 BOOK_CSS = """\
 body {
@@ -91,11 +39,8 @@ p  { margin:0.6em 0; text-align:justify; }
 .aaya   { font-size:1.15em; color:#1a5276; font-weight:bold; }
 .hadith { color:#1e8449; font-style:italic; }
 .footnotes {
-    margin-top: 2.5em;
-    padding-top: 0.8em;
-    border-top: 2px solid #bdc3c7;
-    font-size: 0.88em;
-    color: #555;
+    margin-top: 2.5em; padding-top: 0.8em;
+    border-top: 2px solid #bdc3c7; font-size: 0.88em; color: #555;
 }
 .footnotes p { margin:0.35em 0; line-height: 1.6; }
 sup { font-size: 0.75em; line-height: 0; }
@@ -103,6 +48,7 @@ sup a { color:#2980b9; text-decoration:none; }
 .fn-backref { color:#999; font-size:0.85em; text-decoration:none; margin-right:0.3em; }
 .source-link { display:block; margin-top:0.5em; font-size:0.8em; color:#999; }
 hr { border:none; border-top:1px solid #ddd; margin:1.5em 0; }
+.virtual-page { color:#888; font-style:italic; }
 """
 
 def make_session():
@@ -130,7 +76,7 @@ def get_page(session, url, referer=INDEX):
 SECTION_RE = re.compile(r"^/qfiqhia/(\d+)(?:/|$)")
 
 def get_id_from_url(url):
-    m = SECTION_RE.match(url.replace(BASE,""))
+    m = SECTION_RE.match(url.replace(BASE, ""))
     return int(m.group(1)) if m else None
 
 def get_first_link(html):
@@ -139,7 +85,6 @@ def get_first_link(html):
         return BASE + a["href"]
     return f"{BASE}/qfiqhia/1"
 
-# ✅ إصلاح ١: [0] بدلاً من [-1]
 def get_page_title(html):
     soup = BeautifulSoup(html, "html.parser")
     og = soup.find("meta", property="og:title")
@@ -157,6 +102,27 @@ def get_next_link(html):
             return BASE + a["href"]
     return None
 
+def get_breadcrumb(html):
+    """
+    يعيد قائمة (نص, رابط) لكل عنصر في الـ breadcrumb،
+    بعد تجاوز 'الرئيسة' و'موسوعة القواعد الفقهية'.
+    """
+    soup = BeautifulSoup(html, "html.parser")
+    items = []
+    for sel in ["ol.breadcrumb li", "ul.breadcrumb li",
+                "nav[aria-label='breadcrumb'] li", ".breadcrumb-item"]:
+        found = soup.select(sel)
+        if found:
+            for item in found:
+                text = item.get_text(strip=True)
+                a    = item.find("a")
+                href = (BASE + a["href"]) if a and a.get("href") else None
+                if text:
+                    items.append((text, href))
+            break
+    # تجاوز الرئيسة + اسم الموسوعة (أول عنصرين)
+    return items[2:] if len(items) > 2 else []
+
 def convert_inner_soup(soup_tag):
     for inner in soup_tag.find_all("span", class_="aaya"):
         inner.replace_with(f"﴿{inner.get_text(strip=True)}﴾")
@@ -167,14 +133,14 @@ def convert_inner_soup(soup_tag):
         if t: inner.replace_with(f" {t} ")
 
 def get_tip_text(tip) -> str:
-    for attr in ("data-original-title","data-content","data-tippy-content"):
-        val = tip.get(attr,"").strip()
+    for attr in ("data-original-title", "data-content", "data-tippy-content"):
+        val = tip.get(attr, "").strip()
         if val:
-            s = BeautifulSoup(val,"html.parser")
+            s = BeautifulSoup(val, "html.parser")
             convert_inner_soup(s)
-            return re.sub(r'\s+',' ', s.get_text()).strip()
-    text = re.sub(r'\s+',' ', tip.get_text()).strip()
-    text = re.sub(r'^\s*\[?\d+\]?\s*','', text).strip()
+            return re.sub(r'\s+', ' ', s.get_text()).strip()
+    text = re.sub(r'\s+', ' ', tip.get_text()).strip()
+    text = re.sub(r'^\s*\[?\d+\]?\s*', '', text).strip()
     return text
 
 def _clean_sora(span) -> str:
@@ -184,17 +150,16 @@ def _clean_sora(span) -> str:
 
 def extract_content(html: str, page_id: str) -> dict:
     soup = BeautifulSoup(html, "html.parser")
-
-    for tag in soup.find_all(["nav","header","footer","script","style","form"]):
+    for tag in soup.find_all(["nav", "header", "footer", "script", "style", "form"]):
         tag.decompose()
 
     cntnt = soup.find("div", id="cntnt") or \
             soup.find("div", class_="card-body") or \
             soup.find("body") or soup
 
-    for sel in ["div.card-title","div.dorar-bg-lightGreen","div.collapse",
-                "div.smooth-scroll","div.white.z-depth-1","span.scroll-pos",
-                "div.d-flex.justify-content-between","#enc-tip"]:
+    for sel in ["div.card-title", "div.dorar-bg-lightGreen", "div.collapse",
+                "div.smooth-scroll", "div.white.z-depth-1", "span.scroll-pos",
+                "div.d-flex.justify-content-between", "#enc-tip"]:
         for tag in cntnt.select(sel): tag.decompose()
 
     for h3 in cntnt.find_all("h3", id="more-titles"):
@@ -236,15 +201,13 @@ def extract_content(html: str, page_id: str) -> dict:
 
     def replace_marker(m, _t=tips_map, _f=all_footnotes,
                        _c=global_fn_counter, _pid=page_id):
-        tid   = int(m.group(1))
-        body  = _t.get(tid, '')
-        n     = _c[0]
-        fn_id = f"fn-{_pid}-{n}"
-        ref_id= f"ref-{_pid}-{n}"
+        tid    = int(m.group(1))
+        body   = _t.get(tid, '')
+        n      = _c[0]
+        fn_id  = f"fn-{_pid}-{n}"
+        ref_id = f"ref-{_pid}-{n}"
         _f.append((fn_id, ref_id, n, body))
-        ref = (f'<sup id="{ref_id}">'
-               f'<a href="#{fn_id}">[{n}]</a>'
-               f'</sup>')
+        ref = (f'<sup id="{ref_id}"><a href="#{fn_id}">[{n}]</a></sup>')
         _c[0] += 1
         return ref
 
@@ -260,15 +223,13 @@ def extract_content(html: str, page_id: str) -> dict:
 
     footnotes_html = ""
     if all_footnotes:
-        fn_lines = ['<div class="footnotes">',
-                    '<hr/>',
+        fn_lines = ['<div class="footnotes">', '<hr/>',
                     '<p><strong>الهوامش</strong></p>']
         for fn_id, ref_id, n, body in all_footnotes:
             fn_lines.append(
                 f'<p id="{fn_id}">'
                 f'<a class="fn-backref" href="#{ref_id}">↑</a>'
-                f'<sup>[{n}]</sup> {body}'
-                f'</p>'
+                f'<sup>[{n}]</sup> {body}</p>'
             )
         fn_lines.append('</div>')
         footnotes_html = "\n".join(fn_lines)
@@ -280,8 +241,12 @@ def extract_content(html: str, page_id: str) -> dict:
     }
 
 
-def build_epub_html(title, level, url, parsed):
+def build_epub_html(title, level, url, parsed, virtual=False):
     htag = HTML_HEADING.get(level, "h3")
+    body = parsed['text_html'] + "\n" + parsed['footnotes_html']
+    if virtual:
+        body = f'<p class="virtual-page">[صفحة تنظيمية]</p>'
+    src  = f'<a class="source-link" href="{url}">{url}</a>' if url else ''
     return f"""<?xml version="1.0" encoding="utf-8"?>
 <!DOCTYPE html>
 <html xmlns="http://www.w3.org/1999/xhtml" xml:lang="ar" lang="ar" dir="rtl">
@@ -292,17 +257,32 @@ def build_epub_html(title, level, url, parsed):
 </head>
 <body>
   <{htag}>{title}</{htag}>
-  <a class="source-link" href="{url}">{url}</a>
+  {src}
   <hr/>
-  {parsed['text_html']}
-  {parsed['footnotes_html']}
+  {body}
 </body>
 </html>"""
 
 
-# ✅ إصلاح ٢: بناء TOC متعدد المستويات بمكدس
+def make_virtual_page(title, level, url, counter):
+    """ينشئ صفحة أب افتراضية لعنوان موجود في الـ breadcrumb فقط."""
+    fid = f"virt{counter:05d}"
+    return {
+        "file_id"     : fid,
+        "url"         : url or "",
+        "title"       : title,
+        "level"       : level,
+        "virtual"     : True,
+        "html_content": build_epub_html(
+            title, level, url or "",
+            {"text_html": "", "footnotes_html": ""},
+            virtual=True
+        ),
+    }
+
+
+# ─── TOC ────────────────────────────────────────────────────────────
 def _flatten_toc(entries):
-    """Section بلا أبناء → Link بسيط."""
     result = []
     for e in entries:
         if isinstance(e, tuple):
@@ -316,21 +296,15 @@ def _flatten_toc(entries):
 
 def build_toc(pages):
     root  = []
-    stack = [(0, root)]   # (level, children_list) — المستوى 0 = الجذر
-
+    stack = [(0, root)]
     for page in pages:
-        lvl   = page["level"]
-        href  = f"pages/{page['file_id']}.xhtml"
-        title = page["title"]
-
-        # ارجع حتى نجد أباً بمستوى أقل
+        lvl  = page["level"]
+        href = f"pages/{page['file_id']}.xhtml"
         while len(stack) > 1 and stack[-1][0] >= lvl:
             stack.pop()
-
         children = []
-        stack[-1][1].append((epub.Section(title, href=href), children))
-        stack.append((lvl, children))   # دائماً نضغط على المكدس
-
+        stack[-1][1].append((epub.Section(page["title"], href=href), children))
+        stack.append((lvl, children))
     return _flatten_toc(root)
 
 
@@ -372,7 +346,7 @@ def build_epub(pages):
         book.add_item(item)
         epub_items.append(item)
 
-    book.toc   = build_toc(pages)   # ✅ الشجرة الصحيحة
+    book.toc   = build_toc(pages)
     book.spine = ["nav"] + epub_items
     book.add_item(epub.EpubNcx())
     book.add_item(epub.EpubNav())
@@ -394,8 +368,13 @@ if __name__ == "__main__":
 
         current_url = get_first_link(html_index)
         print(f"\n③ بدء التتبع من: {current_url}\n{'='*60}")
-        all_pages, page_count, visited = [], 0, set()
-        lvl_names = {1:"باب",2:"فصل",3:"مبحث",4:"مطلب",5:"فرع",6:"مسألة"}
+
+        all_pages      = []
+        page_count     = 0
+        visited        = set()          # روابط زيارها الـ scraper
+        seen_titles    = set()          # عناوين أُدرجت (لتجنب التكرار في الآباء)
+        virtual_count  = 0
+        lvl_names      = {1:"باب",2:"فصل",3:"مبحث",4:"مطلب",5:"فرع",6:"مسألة"}
 
         while current_url and current_url not in visited:
             visited.add(current_url)
@@ -404,15 +383,26 @@ if __name__ == "__main__":
             if not html: break
 
             title      = get_page_title(html)
-            breadcrumb = get_breadcrumb(html)
-            level      = detect_level(title, breadcrumb)
-            parsed     = extract_content(html, page_id=f"p{pid}")
+            breadcrumb = get_breadcrumb(html)   # [(نص, رابط), ...]
+
+            # ── المستوى من موضع العنوان في الـ breadcrumb ──
+            # breadcrumb بعد حذف الرئيسة والموسوعة:
+            #   [0]=باب(1) [1]=فصل(2) [2]=مبحث(3) [3]=مطلب(4) [4]=فرع(5) [5]=مسألة(6)
+            level = len(breadcrumb) if breadcrumb else 3
+
+            # ── أدرج العناوين الأب الغائبة كصفحات افتراضية ──
+            for i, (bc_title, bc_url) in enumerate(breadcrumb[:-1]):
+                if bc_title and bc_title not in seen_titles:
+                    seen_titles.add(bc_title)
+                    virtual_count += 1
+                    vp = make_virtual_page(bc_title, i + 1, bc_url, virtual_count)
+                    all_pages.append(vp)
+                    print(f"  [+virtual] L{i+1}({lvl_names.get(i+1,'؟')}) | {bc_title[:60]}")
+
+            # ── الصفحة الفعلية ──
+            parsed = extract_content(html, page_id=f"p{pid}")
             page_count += 1
-
-            # اطبع الـ breadcrumb لأول 10 صفحات للتشخيص
-            if page_count <= 10:
-                print(f"  [BREADCRUMB] {breadcrumb}")
-
+            seen_titles.add(title)
             print(f"  [{page_count}] L{level}({lvl_names.get(level,'؟')}) | "
                   f"{title[:50]}  → {parsed['fn_count']} هامش")
 
@@ -421,6 +411,7 @@ if __name__ == "__main__":
                 "url"         : current_url,
                 "title"       : title,
                 "level"       : level,
+                "virtual"     : False,
                 "html_content": build_epub_html(title, level, current_url, parsed),
             })
 
@@ -428,7 +419,8 @@ if __name__ == "__main__":
                 print(f"\n  [اختبار] توقف عند {TEST_PAGES}"); break
             current_url = get_next_link(html)
 
-        print(f"\n④ بناء الـ EPUB ({len(all_pages)} صفحة)...")
+        print(f"\n④ بناء الـ EPUB ({len(all_pages)} صفحة "
+              f"| {virtual_count} افتراضية + {page_count} فعلية)...")
         build_epub(all_pages)
         print("\n✔ اكتمل.")
     except SystemExit as e: print(e)
