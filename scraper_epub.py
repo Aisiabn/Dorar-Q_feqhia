@@ -24,12 +24,12 @@ TEST_PAGES = None if os.environ.get("TEST_PAGES") == "None" else (
 _TIP_RE = re.compile(r'\x01(\d+)\x01')
 
 LEVEL_PATTERNS = [
-    (1, re.compile(r'^(الباب|القسم|الكتاب|تمهيد)\b')),
-    (2, re.compile(r'^(الفصل|المقدمة)\b')),
-    (3, re.compile(r'^(المبحث)\b')),
-    (4, re.compile(r'^(المطلب)\b')),
-    (5, re.compile(r'^(الفرع)\b')),
-    (6, re.compile(r'^(المسألة|التنبيه|الفائدة|المَسألة|مَسألة)\b')),
+    (1, re.compile(r'^(الباب|القسم|الكتاب|تمهيد)')),
+    (2, re.compile(r'^(الفصل|المقدمة)')),
+    (3, re.compile(r'^(المبحث)')),
+    (4, re.compile(r'^(المطلب)')),
+    (5, re.compile(r'^(الفرع)')),
+    (6, re.compile(r'^(المسألة|التنبيه|الفائدة|المَسألة|مَسألة)')),
 ]
 HTML_HEADING = {1:"h1", 2:"h2", 3:"h3", 4:"h4", 5:"h5", 6:"h6"}
 
@@ -102,13 +102,15 @@ def get_first_link(html):
         return BASE + a["href"]
     return f"{BASE}/qfiqhia/1"
 
+# ✅ إصلاح ١: [0] بدلاً من [-1]
 def get_page_title(html):
     soup = BeautifulSoup(html, "html.parser")
     og = soup.find("meta", property="og:title")
     if og and og.get("content"):
-        return og["content"].split(" - ", 1)[-1].strip()
+        return og["content"].split(" - ", 1)[0].strip()
     t = soup.find("title")
-    if t: return t.get_text().split(" - ")[-1].strip()
+    if t:
+        return t.get_text().split(" - ")[0].strip()
     return ""
 
 def get_next_link(html):
@@ -138,20 +140,12 @@ def get_tip_text(tip) -> str:
     text = re.sub(r'^\s*\[?\d+\]?\s*','', text).strip()
     return text
 
-# ✅ الإصلاح: استبدال \uf\w+ غير الصالحة بنطاق Unicode PUA الصحيح
-_PUA_RE = re.compile(r'[\ue000-\uf8ff]')
-
 def _clean_sora(span) -> str:
     text = span.get_text(strip=True)
-    text = _PUA_RE.sub('', text).strip()
+    text = re.sub(r'\s*\uf\w+\s*','', text).strip()
     return text
 
 def extract_content(html: str, page_id: str) -> dict:
-    """
-    page_id: معرّف فريد للصفحة — يُستخدم كـ prefix لـ anchors الهوامش
-    كل هامش: anchor في النص  id="ref-{page_id}-{n}"
-              تعريف في الأسفل id="fn-{page_id}-{n}"
-    """
     soup = BeautifulSoup(html, "html.parser")
 
     for tag in soup.find_all(["nav","header","footer","script","style","form"]):
@@ -177,7 +171,6 @@ def extract_content(html: str, page_id: str) -> dict:
     for span in content_div.find_all("span", class_="sora"):
         span.replace_with(f" {_clean_sora(span)} ")
 
-    # الحواشي
     tips_map, tip_counter = {}, [1]
     for tip in reversed(list(content_div.find_all("span", class_="tip"))):
         tip_text = get_tip_text(tip)
@@ -188,7 +181,6 @@ def extract_content(html: str, page_id: str) -> dict:
         else:
             tip.decompose()
 
-    # تحويل العلامات → HTML
     for span in content_div.find_all("span", class_="aaya"):
         span.replace_with(f'<span class="aaya">﴿{span.get_text(strip=True)}﴾</span>')
     for span in content_div.find_all("span", class_="hadith"):
@@ -201,18 +193,17 @@ def extract_content(html: str, page_id: str) -> dict:
         if re.search(r"السابق|التالي|انظر أيضا|الرابط المختصر|مشاركة", a.get_text(strip=True)):
             a.decompose()
 
-    # النص مع مراجع الهوامش — anchors فريدة بـ page_id
-    all_footnotes     = []   # [(fn_anchor, ref_anchor, نص)]
+    all_footnotes     = []
     global_fn_counter = [1]
     raw_text          = content_div.get_text(separator="\n")
 
     def replace_marker(m, _t=tips_map, _f=all_footnotes,
                        _c=global_fn_counter, _pid=page_id):
-        tid      = int(m.group(1))
-        body     = _t.get(tid, '')
-        n        = _c[0]
-        fn_id    = f"fn-{_pid}-{n}"    # anchor الهامش في الأسفل
-        ref_id   = f"ref-{_pid}-{n}"   # anchor المرجع في النص
+        tid   = int(m.group(1))
+        body  = _t.get(tid, '')
+        n     = _c[0]
+        fn_id = f"fn-{_pid}-{n}"
+        ref_id= f"ref-{_pid}-{n}"
         _f.append((fn_id, ref_id, n, body))
         ref = (f'<sup id="{ref_id}">'
                f'<a href="#{fn_id}">[{n}]</a>'
@@ -230,7 +221,6 @@ def extract_content(html: str, page_id: str) -> dict:
         if para:
             html_parts.append(para if para.startswith('<h') else f'<p>{para}</p>')
 
-    # قسم الهوامش في نهاية الصفحة مع رابط رجوع لكل هامش
     footnotes_html = ""
     if all_footnotes:
         fn_lines = ['<div class="footnotes">',
@@ -273,6 +263,40 @@ def build_epub_html(title, level, url, parsed):
 </html>"""
 
 
+# ✅ إصلاح ٢: بناء TOC متعدد المستويات بمكدس
+def _flatten_toc(entries):
+    """Section بلا أبناء → Link بسيط."""
+    result = []
+    for e in entries:
+        if isinstance(e, tuple):
+            sec, children = e
+            flat = _flatten_toc(children)
+            result.append((sec, flat) if flat else
+                          epub.Link(href=sec.href, title=sec.title, uid=sec.title[:30]))
+        else:
+            result.append(e)
+    return result
+
+def build_toc(pages):
+    root  = []
+    stack = [(0, root)]   # (level, children_list) — المستوى 0 = الجذر
+
+    for page in pages:
+        lvl   = page["level"]
+        href  = f"pages/{page['file_id']}.xhtml"
+        title = page["title"]
+
+        # ارجع حتى نجد أباً بمستوى أقل
+        while len(stack) > 1 and stack[-1][0] >= lvl:
+            stack.pop()
+
+        children = []
+        stack[-1][1].append((epub.Section(title, href=href), children))
+        stack.append((lvl, children))   # دائماً نضغط على المكدس
+
+    return _flatten_toc(root)
+
+
 def build_epub(pages):
     book = epub.EpubBook()
     book.set_identifier("dorar-qfiqhia-2025")
@@ -301,9 +325,7 @@ def build_epub(pages):
     cover.add_item(css_item)
     book.add_item(cover)
 
-    epub_items  = [cover]
-    toc_entries = []
-
+    epub_items = [cover]
     for page in pages:
         item = epub.EpubHtml(uid=page["file_id"],
                              file_name=f"pages/{page['file_id']}.xhtml",
@@ -313,29 +335,7 @@ def build_epub(pages):
         book.add_item(item)
         epub_items.append(item)
 
-        lvl = page["level"]
-        if lvl == 1:
-            sec = epub.Section(page["title"], href=f"pages/{page['file_id']}.xhtml")
-            toc_entries.append((sec, []))
-        else:
-            indent = "  " * (lvl - 1)
-            link   = epub.Link(href=f"pages/{page['file_id']}.xhtml",
-                               title=indent + page["title"], uid=page["file_id"])
-            parent = next((toc_entries[i] for i in range(len(toc_entries)-1,-1,-1)
-                           if isinstance(toc_entries[i], tuple)), None)
-            if parent: parent[1].append(link)
-            else:       toc_entries.append(link)
-
-    def flatten_toc(entries):
-        result = []
-        for e in entries:
-            if isinstance(e, tuple):
-                sec, children = e
-                result.append((sec, flatten_toc(children)) if children else sec)
-            else: result.append(e)
-        return result
-
-    book.toc   = flatten_toc(toc_entries)
+    book.toc   = build_toc(pages)   # ✅ الشجرة الصحيحة
     book.spine = ["nav"] + epub_items
     book.add_item(epub.EpubNcx())
     book.add_item(epub.EpubNav())
