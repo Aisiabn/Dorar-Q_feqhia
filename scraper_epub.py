@@ -1,6 +1,6 @@
 """
 موسوعة القواعد الفقهية — dorar.net/qfiqhia
-مخرج: ملف EPUB — الهوامش في نهاية كل صفحة مرتبطة بمواضعها
+مخرج: ملف EPUB
 """
 
 import requests
@@ -24,11 +24,8 @@ TEST_PAGES = None if os.environ.get("TEST_PAGES") == "None" else (
 
 _TIP_RE = re.compile(r'\x01(\d+)\x01')
 HTML_HEADING = {1:"h1", 2:"h2", 3:"h3", 4:"h4", 5:"h5", 6:"h6"}
-
-# المستويات التي تحصل على صفحة فهرس
 INDEX_LEVELS = {1, 2, 3}
 
-# أسماء أبناء كل مستوى للعرض
 CHILD_LABELS = {
     2: ("فصل",  "فصلان",  "فصول"),
     3: ("مبحث", "مبحثان", "مباحث"),
@@ -72,27 +69,45 @@ sup a { color:#2980b9; text-decoration:none; }
 hr { border:none; border-top:1px solid #ddd; margin:1.5em 0; }
 """
 
+# ─── الصفحات الملحقة ─────────────────────────────────────────
+FRONT_PAGES_SPEC = [
+    {"url": "https://dorar.net/article/2117", "title": "منهج العمل في الموسوعة",  "level": 1, "file_id": "p00001_front"},
+    {"url": "https://dorar.net/article/2118", "title": "اعتماد منهجية الموسوعة", "level": 1, "file_id": "p00002_front"},
+]
+BACK_PAGES_SPEC = [
+    {"url": "https://dorar.net/refs/qfiqhia", "title": "المراجع المعتمدة", "level": 1, "file_id": "p99999_back"},
+]
+
 def make_session():
     s = requests.Session()
     s.headers.update({
         "User-Agent": "Mozilla/5.0 (Windows NT 6.1; WOW64) AppleWebKit/537.36 "
                       "(KHTML, like Gecko) Chrome/109.0.0.0 Safari/537.36",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         "Accept-Language": "ar,en-US;q=0.9,en;q=0.8",
         "Connection": "keep-alive",
-        "Upgrade-Insecure-Requests": "1",
     })
     return s
 
-def get_page(session, url, referer=INDEX):
+def get_page(session, url, referer=INDEX, retries=4):
     session.headers["Referer"] = referer
-    try:
-        r = session.get(url, timeout=20)
-        print(f"  [{r.status_code}] {url}")
-        return r.text if r.status_code == 200 else ""
-    except Exception as e:
-        print(f"  [ERR] {url} — {e}")
-        return ""
+    for attempt in range(1, retries + 1):
+        try:
+            r = session.get(url, timeout=20)
+            print(f"  [{r.status_code}] {url}")
+            if r.status_code == 200:
+                return r.text
+            if r.status_code in (429, 503, 520, 521, 522, 524):
+                wait = attempt * 10
+                print(f"  [retry {attempt}/{retries}] انتظار {wait}s...")
+                time.sleep(wait)
+                continue
+            return ""
+        except Exception as e:
+            print(f"  [ERR attempt {attempt}] {url} — {e}")
+            time.sleep(attempt * 5)
+    print(f"  [FAILED] {url}")
+    return ""
 
 SECTION_RE = re.compile(r"^/qfiqhia/(\d+)(?:/|$)")
 
@@ -130,7 +145,7 @@ def get_breadcrumb(html):
         items = soup.select(sel)
         if items:
             texts = [i.get_text(strip=True) for i in items if i.get_text(strip=True)]
-            return texts[2:]   # تجاوز الرئيسة + اسم الموسوعة
+            return texts[2:]
     return []
 
 def convert_inner_soup(soup_tag):
@@ -150,13 +165,10 @@ def get_tip_text(tip) -> str:
             convert_inner_soup(s)
             return re.sub(r'\s+', ' ', s.get_text()).strip()
     text = re.sub(r'\s+', ' ', tip.get_text()).strip()
-    text = re.sub(r'^\s*\[?\d+\]?\s*', '', text).strip()
-    return text
+    return re.sub(r'^\s*\[?\d+\]?\s*', '', text).strip()
 
 def _clean_sora(span) -> str:
-    text = span.get_text(strip=True)
-    text = re.sub(r'[\ue000-\uf8ff]', '', text).strip()
-    return text
+    return re.sub(r'[\ue000-\uf8ff]', '', span.get_text(strip=True)).strip()
 
 def extract_content(html: str, page_id: str) -> dict:
     soup = BeautifulSoup(html, "html.parser")
@@ -209,15 +221,14 @@ def extract_content(html: str, page_id: str) -> dict:
     global_fn_counter = [1]
     raw_text          = content_div.get_text(separator="\n")
 
-    def replace_marker(m, _t=tips_map, _f=all_footnotes,
-                       _c=global_fn_counter, _pid=page_id):
+    def replace_marker(m):
         tid    = int(m.group(1))
-        body   = _t.get(tid, '')
-        n      = _c[0]
-        fn_id  = f"fn-{_pid}-{n}"
-        ref_id = f"ref-{_pid}-{n}"
-        _f.append((fn_id, ref_id, n, body))
-        _c[0] += 1
+        body   = tips_map.get(tid, '')
+        n      = global_fn_counter[0]
+        fn_id  = f"fn-{page_id}-{n}"
+        ref_id = f"ref-{page_id}-{n}"
+        all_footnotes.append((fn_id, ref_id, n, body))
+        global_fn_counter[0] += 1
         return f'<sup id="{ref_id}"><a href="#{fn_id}">[{n}]</a></sup>'
 
     processed = _TIP_RE.sub(replace_marker, raw_text)
@@ -232,22 +243,13 @@ def extract_content(html: str, page_id: str) -> dict:
 
     footnotes_html = ""
     if all_footnotes:
-        fn_lines = ['<div class="footnotes">', '<hr/>',
-                    '<p><strong>الهوامش</strong></p>']
+        fn_lines = ['<div class="footnotes">', '<hr/>', '<p><strong>الهوامش</strong></p>']
         for fn_id, ref_id, n, body in all_footnotes:
-            fn_lines.append(
-                f'<p id="{fn_id}">'
-                f'<a class="fn-backref" href="#{ref_id}">↑</a>'
-                f'<sup>[{n}]</sup> {body}</p>'
-            )
+            fn_lines.append(f'<p id="{fn_id}"><a class="fn-backref" href="#{ref_id}">↑</a><sup>[{n}]</sup> {body}</p>')
         fn_lines.append('</div>')
         footnotes_html = "\n".join(fn_lines)
 
-    return {
-        "text_html"     : "\n".join(html_parts),
-        "footnotes_html": footnotes_html,
-        "fn_count"      : len(all_footnotes),
-    }
+    return {"text_html": "\n".join(html_parts), "footnotes_html": footnotes_html, "fn_count": len(all_footnotes)}
 
 
 def build_real_page_html(title, level, url, parsed):
@@ -255,166 +257,131 @@ def build_real_page_html(title, level, url, parsed):
     return f"""<?xml version="1.0" encoding="utf-8"?>
 <!DOCTYPE html>
 <html xmlns="http://www.w3.org/1999/xhtml" xml:lang="ar" lang="ar" dir="rtl">
-<head>
-  <meta charset="utf-8"/>
-  <title>{title}</title>
-  <link rel="stylesheet" type="text/css" href="../styles/book.css"/>
-</head>
+<head><meta charset="utf-8"/><title>{title}</title>
+<link rel="stylesheet" type="text/css" href="../styles/book.css"/></head>
 <body>
   <{htag}>{title}</{htag}>
-  <a class="source-link" href="{url}">{url}</a>
-  <hr/>
+  <a class="source-link" href="{url}">{url}</a><hr/>
   {parsed['text_html']}
   {parsed['footnotes_html']}
-</body>
-</html>"""
+</body></html>"""
 
 
-# ─── صفحات الفهرس (باب / فصل / مبحث) ────────────────────────────────
+def fetch_extra_pages(session, specs):
+    result = []
+    for spec in specs:
+        html = get_page(session, spec["url"], referer=INDEX)
+        if not html:
+            print(f"  [SKIP] {spec['url']}")
+            continue
+        fetched_title = get_page_title(html)
+        title  = fetched_title if fetched_title else spec["title"]
+        parsed = extract_content(html, page_id=spec["file_id"])
+        print(f"  [ملحق] {title}  → {parsed['fn_count']} هامش")
+        result.append({
+            "file_id"     : spec["file_id"],
+            "url"         : spec["url"],
+            "title"       : title,
+            "level"       : spec["level"],
+            "breadcrumb"  : [title],
+            "is_index"    : False,
+            "html_content": build_real_page_html(title, spec["level"], spec["url"], parsed),
+        })
+        time.sleep(DELAY)
+    return result
+
+
+# ─── صفحات الفهرس ────────────────────────────────────────────
 def build_section_tree(real_pages):
-    """
-    يبني شجرة الأقسام للمستويات 1-3.
-    يعيد dict مرتب: (level, title) →
-        { title, level, children: [child_title, ...] }
-    الأبناء بالترتيب الذي ظهروا فيه أثناء الجلب.
-    """
-    sections = {}
-    order    = []   # لحفظ الترتيب
-
+    sections, order = {}, []
     for page in real_pages:
         bc = page["breadcrumb"]
         for depth in range(min(3, len(bc) - 1)):
-            lvl   = depth + 1
-            title = bc[depth]
-            key   = (lvl, title)
+            lvl, title = depth + 1, bc[depth]
+            key = (lvl, title)
             if key not in sections:
                 sections[key] = {"title": title, "level": lvl, "children": []}
                 order.append(key)
-            # الابن المباشر
             if depth + 1 < len(bc):
                 child = bc[depth + 1]
                 if child not in sections[key]["children"]:
                     sections[key]["children"].append(child)
-
     return {k: sections[k] for k in order}
 
-
 def make_index_page_html(sec):
-    """ينشئ HTML لصفحة فهرس قسم."""
-    title       = sec["title"]
-    level       = sec["level"]
-    children    = sec["children"]
-    child_level = level + 1
-    htag        = HTML_HEADING.get(level, "h2")
-
-    label    = count_label(len(children), child_level)
-    items_html = "\n    ".join(f"<li>{c}</li>" for c in children)
-
+    title, level, children = sec["title"], sec["level"], sec["children"]
+    htag  = HTML_HEADING.get(level, "h2")
+    label = count_label(len(children), level + 1)
+    items = "\n    ".join(f"<li>{c}</li>" for c in children)
     return f"""<?xml version="1.0" encoding="utf-8"?>
 <!DOCTYPE html>
 <html xmlns="http://www.w3.org/1999/xhtml" xml:lang="ar" lang="ar" dir="rtl">
-<head>
-  <meta charset="utf-8"/>
-  <title>{title}</title>
-  <link rel="stylesheet" type="text/css" href="../styles/book.css"/>
-</head>
+<head><meta charset="utf-8"/><title>{title}</title>
+<link rel="stylesheet" type="text/css" href="../styles/book.css"/></head>
 <body>
-  <{htag}>{title}</{htag}>
-  <hr/>
+  <{htag}>{title}</{htag}><hr/>
   <p>وفيه {label}:</p>
-  <ol>
-    {items_html}
-  </ol>
-</body>
-</html>"""
-
+  <ol>{items}</ol>
+</body></html>"""
 
 def build_final_pages(real_pages, sections):
-    """
-    يدمج صفحات الفهرس مع الصفحات الفعلية بالترتيب الصحيح.
-    صفحة الفهرس تُدرج مرة واحدة فقط، عند أول ظهور لقسمها.
-    """
-    inserted = set()
-    final    = []
-
+    inserted, final = set(), []
     for page in real_pages:
         bc = page["breadcrumb"]
-
-        # للمستويات 1-3: أدرج صفحة الفهرس عند أول ظهور
         for depth in range(min(3, len(bc) - 1)):
             key = (depth + 1, bc[depth])
             if key not in inserted and key in sections:
                 inserted.add(key)
-                sec    = sections[key]
-                fid    = f"idx{depth+1}_{short_hash(sec['title'])}"
-                # breadcrumb لصفحة الفهرس = مسارها هي (للـ TOC)
-                idx_bc = bc[:depth + 1]
+                sec = sections[key]
+                fid = f"idx{depth+1}_{short_hash(sec['title'])}"
                 final.append({
                     "file_id"     : fid,
                     "title"       : sec["title"],
                     "level"       : sec["level"],
-                    "breadcrumb"  : idx_bc,
+                    "breadcrumb"  : bc[:depth + 1],
                     "is_index"    : True,
                     "html_content": make_index_page_html(sec),
                 })
-
         final.append(page)
-
     return final
 
 
-# ─── TOC ─────────────────────────────────────────────────────────────
+# ─── TOC ─────────────────────────────────────────────────────
 def build_toc(pages):
-    """
-    يبني شجرة TOC من breadcrumb كل صفحة.
-    آخر عنصر في breadcrumb = عنوان الصفحة.
-    ما قبله = سلسلة الأجداد → تُنشئ Sections عند الحاجة.
-    """
-    root  = []
-    stack = []   # [(bc_title, children_list)]
+    root, stack = [], []
 
     def get_children(ancestors):
         nonlocal stack, root
         common = 0
         for i, t in enumerate(ancestors):
-            if i < len(stack) and stack[i][0] == t:
-                common = i + 1
-            else:
-                break
+            if i < len(stack) and stack[i][0] == t: common = i + 1
+            else: break
         stack = stack[:common]
         for i in range(common, len(ancestors)):
-            t        = ancestors[i]
             children = []
-            parent   = stack[i-1][1] if i > 0 else root
-            # ابحث إن كان Section موجوداً مسبقاً (حالة نادرة)
-            parent.append((epub.Section(t, href="#"), children))
-            stack.append((t, children))
+            parent = stack[i-1][1] if i > 0 else root
+            parent.append((epub.Section(ancestors[i], href="#"), children))
+            stack.append((ancestors[i], children))
         return stack[-1][1] if stack else root
 
     for page in pages:
-        bc       = page["breadcrumb"]
-        href     = f"pages/{page['file_id']}.xhtml"
-        title    = page["title"]
+        bc        = page["breadcrumb"]
+        href      = f"pages/{page['file_id']}.xhtml"
         ancestors = bc[:-1]
-        link     = epub.Link(href=href, title=title, uid=page["file_id"])
-
+        link      = epub.Link(href=href, title=page["title"], uid=page["file_id"])
         if not ancestors:
             root.append(link)
         else:
             children = get_children(ancestors)
-            # لصفحات الفهرس: حدّث href الـ Section الأب ليشير إليها
             if page.get("is_index") and stack:
-                sec_entry = stack[-1]
                 parent_list = stack[-2][1] if len(stack) >= 2 else root
                 for i, e in enumerate(parent_list):
-                    if isinstance(e, tuple) and e[0].title == title:
-                        new_sec = epub.Section(title, href=href)
-                        parent_list[i] = (new_sec, e[1])
+                    if isinstance(e, tuple) and e[0].title == page["title"]:
+                        parent_list[i] = (epub.Section(page["title"], href=href), e[1])
                         break
             children.append(link)
 
     return _flatten_toc(root)
-
 
 def _flatten_toc(entries):
     result = []
@@ -447,8 +414,7 @@ def build_epub(pages):
 <head><meta charset="utf-8"/><title>موسوعة القواعد الفقهية</title>
 <link rel="stylesheet" type="text/css" href="styles/book.css"/></head>
 <body style="text-align:center;padding-top:3em;">
-  <h1>موسوعة القواعد الفقهية</h1>
-  <p>الدرر السنية</p>
+  <h1>موسوعة القواعد الفقهية</h1><p>الدرر السنية</p>
   <p><a href="{INDEX}">{INDEX}</a></p>
   <p>عدد الصفحات: {len(pages)}</p>
 </body></html>"""
@@ -473,8 +439,7 @@ def build_epub(pages):
     book.add_item(epub.EpubNav())
     os.makedirs(OUT_DIR, exist_ok=True)
     epub.write_epub(EPUB_OUT, book)
-    print(f"\n  ✔ EPUB: {EPUB_OUT}  |  {len(pages)} صفحة  "
-          f"|  ~{os.path.getsize(EPUB_OUT)//1024} KB")
+    print(f"\n  ✔ EPUB: {EPUB_OUT}  |  {len(pages)} صفحة  |  ~{os.path.getsize(EPUB_OUT)//1024} KB")
 
 
 if __name__ == "__main__":
@@ -483,14 +448,16 @@ if __name__ == "__main__":
         session = make_session()
         print("① تهيئة الجلسة...")
         get_page(session, BASE, referer=BASE); time.sleep(1.5)
+
         print("\n② جلب صفحة الفهرس...")
         html_index = get_page(session, INDEX, referer=BASE); time.sleep(2)
         if not html_index: raise SystemExit("فشل جلب الفهرس")
 
-        current_url = get_first_link(html_index)
-        print(f"\n③ بدء التتبع من: {current_url}\n{'='*60}")
+        print("\n③-أ جلب صفحات البداية (منهج + اعتماد)...")
+        real_pages = fetch_extra_pages(session, FRONT_PAGES_SPEC)
 
-        real_pages = []
+        current_url = get_first_link(html_index)
+        print(f"\n③-ب تتبع الموسوعة من: {current_url}\n{'='*60}")
         page_count = 0
         visited    = set()
         lvl_names  = {1:"باب",2:"فصل",3:"مبحث",4:"مطلب",5:"فرع",6:"مسألة"}
@@ -508,8 +475,7 @@ if __name__ == "__main__":
             level  = len(breadcrumb)
             parsed = extract_content(html, page_id=f"p{pid}")
             page_count += 1
-            print(f"  [{page_count}] L{level}({lvl_names.get(level,'؟')}) | "
-                  f"{title[:50]}  → {parsed['fn_count']} هامش")
+            print(f"  [{page_count}] L{level}({lvl_names.get(level,'؟')}) | {title[:50]}  → {parsed['fn_count']} هامش")
 
             real_pages.append({
                 "file_id"     : f"p{pid:05d}",
@@ -525,11 +491,14 @@ if __name__ == "__main__":
                 print(f"\n  [اختبار] توقف عند {TEST_PAGES}"); break
             current_url = get_next_link(html)
 
+        print("\n③-ج جلب صفحات النهاية (المراجع)...")
+        real_pages += fetch_extra_pages(session, BACK_PAGES_SPEC)
+
         print(f"\n④ بناء صفحات الفهارس...")
-        sections   = build_section_tree(real_pages)
-        all_pages  = build_final_pages(real_pages, sections)
-        idx_count  = sum(1 for p in all_pages if p.get("is_index"))
-        print(f"   {idx_count} صفحة فهرس + {page_count} صفحة فعلية = {len(all_pages)} إجمالاً")
+        sections  = build_section_tree(real_pages)
+        all_pages = build_final_pages(real_pages, sections)
+        idx_count = sum(1 for p in all_pages if p.get("is_index"))
+        print(f"   {idx_count} فهرس + {page_count} فعلية + {len(real_pages)-page_count} ملحق = {len(all_pages)} إجمالاً")
 
         print(f"\n⑤ بناء الـ EPUB...")
         build_epub(all_pages)
