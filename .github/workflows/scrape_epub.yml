@@ -4,7 +4,7 @@ on:
   workflow_dispatch:          # تشغيل يدوي من GitHub UI
     inputs:
       test_pages:
-        description: 'عدد صفحات للاختبار (اتركه فارغاً للكامل)'
+        description: 'عدد صفحات للاختبار6 (اتركه فارغاً للكامل)'
         required: false
         default: ''
 
