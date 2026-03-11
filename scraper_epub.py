@@ -267,6 +267,26 @@ def build_real_page_html(title, level, url, parsed):
 </body></html>"""
 
 
+def extract_refs_content(html: str) -> dict:
+    """مستخرج خاص لصفحة refs/qfiqhia — كل مرجع في <article class='border-bottom'>"""
+    soup = BeautifulSoup(html, "html.parser")
+    articles = soup.select("article.border-bottom")
+    parts = []
+    for art in articles:
+        h5    = art.find("h5")
+        title = h5.get_text(strip=True) if h5 else ""
+        fields = []
+        for strong in art.find_all("strong"):
+            label = strong.get_text(strip=True).rstrip(":")
+            span  = strong.find("span")
+            value = span.get_text(strip=True) if span else ""
+            if value and value != "بدون":
+                fields.append(f"{label}: {value}")
+        meta = " | ".join(fields)
+        parts.append(f"<p><strong>{title}</strong><br/>{meta}</p>")
+    return {"text_html": "\n".join(parts), "footnotes_html": "", "fn_count": 0}
+
+
 def fetch_extra_pages(session, specs):
     result = []
     for spec in specs:
@@ -275,8 +295,14 @@ def fetch_extra_pages(session, specs):
             print(f"  [SKIP] {spec['url']}")
             continue
         fetched_title = get_page_title(html)
-        title  = fetched_title if fetched_title else spec["title"]
-        parsed = extract_content(html, page_id=spec["file_id"])
+        title = fetched_title if fetched_title else spec["title"]
+
+        # صفحة المراجع لها مستخرج خاص
+        if "refs/" in spec["url"]:
+            parsed = extract_refs_content(html)
+        else:
+            parsed = extract_content(html, page_id=spec["file_id"])
+
         print(f"  [ملحق] {title}  → {parsed['fn_count']} هامش")
         result.append({
             "file_id"     : spec["file_id"],
