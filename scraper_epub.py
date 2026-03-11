@@ -22,20 +22,19 @@ TEST_PAGES = None if os.environ.get("TEST_PAGES") == "None" else (
     int(os.environ["TEST_PAGES"]) if os.environ.get("TEST_PAGES") else None
 )
 
-_TIP_RE = re.compile(r'\x01(\d+)\x01')
+_TIP_RE    = re.compile(r'\x01(\d+)\x01')
 HTML_HEADING = {1:"h1", 2:"h2", 3:"h3", 4:"h4", 5:"h5", 6:"h6"}
-INDEX_LEVELS = {1, 2, 3}
 
 CHILD_LABELS = {
     2: ("فصل",  "فصلان",  "فصول"),
     3: ("مبحث", "مبحثان", "مباحث"),
     4: ("مطلب", "مطلبان", "مطالب"),
 }
-NUM_WORDS = ['', 'واحد', 'اثنان', 'ثلاثة', 'أربعة', 'خمسة',
-             'ستة', 'سبعة', 'ثمانية', 'تسعة', 'عشرة']
+NUM_WORDS = ['','واحد','اثنان','ثلاثة','أربعة','خمسة',
+             'ستة','سبعة','ثمانية','تسعة','عشرة']
 
 def count_label(n, child_level):
-    sing, dual, plur = CHILD_LABELS.get(child_level, ("قسم", "قسمان", "أقسام"))
+    sing, dual, plur = CHILD_LABELS.get(child_level, ("قسم","قسمان","أقسام"))
     if n == 1: return f"{sing} واحد"
     if n == 2: return dual
     if 3 <= n <= 10: return f"{NUM_WORDS[n]} {plur}"
@@ -95,19 +94,16 @@ def get_page(session, url, referer=INDEX, retries=4):
         try:
             r = session.get(url, timeout=20)
             print(f"  [{r.status_code}] {url}")
-            if r.status_code == 200:
-                return r.text
+            if r.status_code == 200: return r.text
             if r.status_code in (429, 503, 520, 521, 522, 524):
                 wait = attempt * 10
                 print(f"  [retry {attempt}/{retries}] انتظار {wait}s...")
-                time.sleep(wait)
-                continue
+                time.sleep(wait); continue
             return ""
         except Exception as e:
             print(f"  [ERR attempt {attempt}] {url} — {e}")
             time.sleep(attempt * 5)
-    print(f"  [FAILED] {url}")
-    return ""
+    print(f"  [FAILED] {url}"); return ""
 
 SECTION_RE = re.compile(r"^/qfiqhia/(\d+)(?:/|$)")
 
@@ -127,8 +123,7 @@ def get_page_title(html):
     if og and og.get("content"):
         return og["content"].split(" - ", 1)[0].strip()
     t = soup.find("title")
-    if t:
-        return t.get_text().split(" - ")[0].strip()
+    if t: return t.get_text().split(" - ")[0].strip()
     return ""
 
 def get_next_link(html):
@@ -172,16 +167,16 @@ def _clean_sora(span) -> str:
 
 def extract_content(html: str, page_id: str) -> dict:
     soup = BeautifulSoup(html, "html.parser")
-    for tag in soup.find_all(["nav", "header", "footer", "script", "style", "form"]):
+    for tag in soup.find_all(["nav","header","footer","script","style","form"]):
         tag.decompose()
 
     cntnt = soup.find("div", id="cntnt") or \
             soup.find("div", class_="card-body") or \
             soup.find("body") or soup
 
-    for sel in ["div.card-title", "div.dorar-bg-lightGreen", "div.collapse",
-                "div.smooth-scroll", "div.white.z-depth-1", "span.scroll-pos",
-                "div.d-flex.justify-content-between", "#enc-tip"]:
+    for sel in ["div.card-title","div.dorar-bg-lightGreen","div.collapse",
+                "div.smooth-scroll","div.white.z-depth-1","span.scroll-pos",
+                "div.d-flex.justify-content-between","#enc-tip"]:
         for tag in cntnt.select(sel): tag.decompose()
 
     for h3 in cntnt.find_all("h3", id="more-titles"):
@@ -217,9 +212,8 @@ def extract_content(html: str, page_id: str) -> dict:
         if re.search(r"السابق|التالي|انظر أيضا|الرابط المختصر|مشاركة", a.get_text(strip=True)):
             a.decompose()
 
-    all_footnotes     = []
-    global_fn_counter = [1]
-    raw_text          = content_div.get_text(separator="\n")
+    all_footnotes, global_fn_counter = [], [1]
+    raw_text = content_div.get_text(separator="\n")
 
     def replace_marker(m):
         tid    = int(m.group(1))
@@ -243,13 +237,31 @@ def extract_content(html: str, page_id: str) -> dict:
 
     footnotes_html = ""
     if all_footnotes:
-        fn_lines = ['<div class="footnotes">', '<hr/>', '<p><strong>الهوامش</strong></p>']
+        fn_lines = ['<div class="footnotes">','<hr/>','<p><strong>الهوامش</strong></p>']
         for fn_id, ref_id, n, body in all_footnotes:
             fn_lines.append(f'<p id="{fn_id}"><a class="fn-backref" href="#{ref_id}">↑</a><sup>[{n}]</sup> {body}</p>')
         fn_lines.append('</div>')
         footnotes_html = "\n".join(fn_lines)
 
     return {"text_html": "\n".join(html_parts), "footnotes_html": footnotes_html, "fn_count": len(all_footnotes)}
+
+
+def extract_refs_epub(html: str) -> dict:
+    soup     = BeautifulSoup(html, "html.parser")
+    articles = soup.select("article.border-bottom")
+    parts    = []
+    for i, art in enumerate(articles, 1):
+        h5    = art.find("h5")
+        title = re.sub(r'^\d+[-–]\s*', '', h5.get_text(strip=True)) if h5 else ""
+        fields = []
+        for strong in art.find_all("strong"):
+            span  = strong.find("span")
+            value = span.get_text(strip=True) if span else ""
+            if value and value != "بدون":
+                fields.append(value)
+        meta = ". ".join(fields)
+        parts.append(f'<p><strong>{i}- {title}.</strong> {meta}.</p>')
+    return {"text_html": "\n".join(parts), "footnotes_html": "", "fn_count": 0}
 
 
 def build_real_page_html(title, level, url, parsed):
@@ -267,42 +279,16 @@ def build_real_page_html(title, level, url, parsed):
 </body></html>"""
 
 
-def extract_refs_content(html: str) -> dict:
-    """مستخرج خاص لصفحة refs/qfiqhia — كل مرجع في <article class='border-bottom'>"""
-    soup = BeautifulSoup(html, "html.parser")
-    articles = soup.select("article.border-bottom")
-    parts = []
-    for art in articles:
-        h5    = art.find("h5")
-        title = h5.get_text(strip=True) if h5 else ""
-        fields = []
-        for strong in art.find_all("strong"):
-            label = strong.get_text(strip=True).rstrip(":")
-            span  = strong.find("span")
-            value = span.get_text(strip=True) if span else ""
-            if value and value != "بدون":
-                fields.append(f"{label}: {value}")
-        meta = " | ".join(fields)
-        parts.append(f"<p><strong>{title}</strong><br/>{meta}</p>")
-    return {"text_html": "\n".join(parts), "footnotes_html": "", "fn_count": 0}
-
-
 def fetch_extra_pages(session, specs):
     result = []
     for spec in specs:
         html = get_page(session, spec["url"], referer=INDEX)
         if not html:
-            print(f"  [SKIP] {spec['url']}")
-            continue
+            print(f"  [SKIP] {spec['url']}"); continue
         fetched_title = get_page_title(html)
-        title = fetched_title if fetched_title else spec["title"]
-
-        # صفحة المراجع لها مستخرج خاص
-        if "refs/" in spec["url"]:
-            parsed = extract_refs_content(html)
-        else:
-            parsed = extract_content(html, page_id=spec["file_id"])
-
+        title    = fetched_title if fetched_title else spec["title"]
+        is_refs  = "refs/" in spec["url"]
+        parsed   = extract_refs_epub(html) if is_refs else extract_content(html, page_id=spec["file_id"])
         print(f"  [ملحق] {title}  → {parsed['fn_count']} هامش")
         result.append({
             "file_id"     : spec["file_id"],
@@ -321,6 +307,7 @@ def fetch_extra_pages(session, specs):
 def build_section_tree(real_pages):
     sections, order = {}, []
     for page in real_pages:
+        if page.get("extra"): continue
         bc = page["breadcrumb"]
         for depth in range(min(3, len(bc) - 1)):
             lvl, title = depth + 1, bc[depth]
@@ -373,6 +360,18 @@ def build_final_pages(real_pages, sections):
 
 
 # ─── TOC ─────────────────────────────────────────────────────
+def _flatten_toc(entries):
+    result = []
+    for e in entries:
+        if isinstance(e, tuple):
+            sec, children = e
+            flat = _flatten_toc(children)
+            result.append((sec, flat) if flat else
+                          epub.Link(href=sec.href, title=sec.title, uid=sec.title[:30]))
+        else:
+            result.append(e)
+    return result
+
 def build_toc(pages):
     root, stack = [], []
 
@@ -408,18 +407,6 @@ def build_toc(pages):
             children.append(link)
 
     return _flatten_toc(root)
-
-def _flatten_toc(entries):
-    result = []
-    for e in entries:
-        if isinstance(e, tuple):
-            sec, children = e
-            flat = _flatten_toc(children)
-            result.append((sec, flat) if flat else
-                          epub.Link(href=sec.href, title=sec.title, uid=sec.title[:30]))
-        else:
-            result.append(e)
-    return result
 
 
 def build_epub(pages):
@@ -479,14 +466,13 @@ if __name__ == "__main__":
         html_index = get_page(session, INDEX, referer=BASE); time.sleep(2)
         if not html_index: raise SystemExit("فشل جلب الفهرس")
 
-        print("\n③-أ جلب صفحات البداية (منهج + اعتماد)...")
+        print("\n③-أ جلب صفحات البداية...")
         real_pages = fetch_extra_pages(session, FRONT_PAGES_SPEC)
 
         current_url = get_first_link(html_index)
         print(f"\n③-ب تتبع الموسوعة من: {current_url}\n{'='*60}")
-        page_count = 0
-        visited    = set()
-        lvl_names  = {1:"باب",2:"فصل",3:"مبحث",4:"مطلب",5:"فرع",6:"مسألة"}
+        page_count, visited = 0, set()
+        lvl_names = {1:"باب",2:"فصل",3:"مبحث",4:"مطلب",5:"فرع",6:"مسألة"}
 
         while current_url and current_url not in visited:
             visited.add(current_url)
